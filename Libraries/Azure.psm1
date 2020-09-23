@@ -1606,17 +1606,24 @@ Function Invoke-AllResourceGroupDeployments($SetupTypeData, $CurrentTestData, $R
 					$dataDiskAdded = $true
 				}
 			}
-			Add-Content -Value "$($indents[6]){" -Path $jsonFile
-			Add-Content -Value "$($indents[7])^name^: ^$vmName-disk-lun-0^," -Path $jsonFile
-			Add-Content -Value "$($indents[7])^diskSizeGB^: ^900^," -Path $jsonFile
-			Add-Content -Value "$($indents[7])^lun^: ^0^," -Path $jsonFile
-			Add-Content -Value "$($indents[7])^createOption^: ^FromImage^," -Path $jsonFile
-			Add-Content -Value "$($indents[7])^caching^: ^ReadOnly^," -Path $jsonFile
-			Add-Content -Value "$($indents[7])^managedDisk^:" -Path $jsonFile
-			Add-Content -Value "$($indents[7]){" -Path $jsonFile
-			Add-Content -Value "$($indents[8])^storageAccountType^: ^$StorageAccountType^" -Path $jsonFile
-			Add-Content -Value "$($indents[7])}" -Path $jsonFile
-			Add-Content -Value "$($indents[6])}" -Path $jsonFile
+			foreach ( $dataDisk in $used_image.DataDiskImages ) {
+				if ( $dataDisk.LUN -ge 0 ) {
+					if ( $dataDiskAdded ) {
+						Add-Content -Value "$($indents[6])," -Path $jsonFile
+					}
+					Add-Content -Value "$($indents[6]){" -Path $jsonFile
+					Add-Content -Value "$($indents[7])^name^: ^$vmName-disk-lun-$($dataDisk.LUN)^," -Path $jsonFile
+					Add-Content -Value "$($indents[7])^diskSizeGB^: ^1024^," -Path $jsonFile
+					Add-Content -Value "$($indents[7])^lun^: ^$($dataDisk.LUN)^," -Path $jsonFile
+					Add-Content -Value "$($indents[7])^createOption^: ^FromImage^," -Path $jsonFile
+					Add-Content -Value "$($indents[7])^caching^: ^ReadOnly^," -Path $jsonFile
+					Add-Content -Value "$($indents[7])^managedDisk^:" -Path $jsonFile
+					Add-Content -Value "$($indents[7]){" -Path $jsonFile
+					Add-Content -Value "$($indents[8])^storageAccountType^: ^$StorageAccountType^" -Path $jsonFile
+					Add-Content -Value "$($indents[7])}" -Path $jsonFile
+					Add-Content -Value "$($indents[6])}" -Path $jsonFile
+				}
+			}
 			Add-Content -Value "$($indents[5])]" -Path $jsonFile
 			Add-Content -Value "$($indents[4])}" -Path $jsonFile
 			Add-Content -Value "$($indents[4])," -Path $jsonFile
