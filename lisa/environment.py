@@ -120,7 +120,7 @@ class Environment(ContextMixin, InitializableMixin):
         if not self.is_ready:
             raise LisaException("environment is not ready, cannot be initialized")
         # environment is ready, refresh latest capability
-        self._capability = None
+        self.reset_capability()
         self.nodes.initialize()
 
     @classmethod
@@ -171,6 +171,12 @@ class Environment(ContextMixin, InitializableMixin):
                 result.nodes.extend(self.runbook.nodes_requirement)
             self._capability = result
         return self._capability
+
+    def reset_capability(self) -> None:
+        """
+        when node requirements or capability need to refresh, call this method.
+        """
+        self._capability = None
 
     def __validate_single_default(
         self, has_default: bool, is_default: Optional[bool]

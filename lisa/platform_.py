@@ -94,6 +94,7 @@ class Platform(ABC, InitializableMixin):
             is_success = self._prepare_environment(environment, log)
             if is_success:
                 prepared_environments.append(environment)
+                environment.reset_capability()
             else:
                 log.debug("dropped since no fit capability found")
 
