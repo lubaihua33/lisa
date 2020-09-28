@@ -7,6 +7,13 @@ environment:
         - type: local
 notifier:
   - type: console
+  - type: database
+    server: ""
+    database: ""
+    username: ""
+    password: ""
+    tablename: ""
+    driver: "ODBC Driver 17 for SQL Server"
 testcase:
   - criteria:
       area: demo
