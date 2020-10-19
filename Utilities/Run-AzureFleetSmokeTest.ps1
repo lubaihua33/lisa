@@ -60,6 +60,7 @@ Function Run-SmokeTestbyLISAv3($ARMImage, $TestLocation)
 Function Install-LISAv3() {
     git clone https://microsoft.visualstudio.com/DefaultCollection/LSG/_git/lsg-lisa
     Set-Location -Path ".\lsg-lisa"
+    git checkout main
     git submodule init
     git submodule update
 
