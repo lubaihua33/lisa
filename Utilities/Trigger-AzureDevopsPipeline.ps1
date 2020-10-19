@@ -163,15 +163,15 @@ if ($server -and $dbuser -and $dbpassword -and $database) {
                 Write-Host "Info: No image in the location:  $TestLocation"
                 continue
             }
-            $OptimalNumberList = Get-OptimalNumberInOnePipeline -TotalNumber $TotalNumber -SuggestedNumber $SuggestedNumber
+            $OptimalNumberList = [System.Collections.ArrayList](Get-OptimalNumberInOnePipeline -TotalNumber $TotalNumber -SuggestedNumber $SuggestedNumber)
 
             # Trigger ADO pipeline
             $i = 0; $count = 0; $retry = 0
             While ($retry -lt 3) {
                 $BuildNumber = Trigger-ADOPipeline -OrganizationUrl $OrganizationUrl -AzureDevOpsProjectName $AzureDevOpsProjectName `
-                    -PipelineName $PipelineName -DevOpsPAT $DevOpsPAT -Branch $Branch -TestLocation $TestLocation -NumberOfImages $OptimalNumberList[$i]
+                    -PipelineName $PipelineName -DevOpsPAT $DevOpsPAT -Branch $Branch -TestLocation $TestLocation -NumberOfImages $OptimalNumberList[$i + $OptimalNumberList.count/2]
                 if ($BuildNumber) {
-                    Write-Host "Info: The pipeline #BuildId $BuildNumber will run $($OptimalNumberList[$i]) images in $TestLocation"
+                    Write-Host "Info: The pipeline #BuildId $BuildNumber will run $($OptimalNumberList[$i + $OptimalNumberList.count/2]) images in $TestLocation"
                     break
                 }
             }
@@ -192,14 +192,14 @@ if ($server -and $dbuser -and $dbpassword -and $database) {
                 $command3.CommandText = $sqlQuery
                 $null = $command3.executenonquery()
                 $count += 1
-                if (($count -eq $OptimalNumberList[$i]) -and ($OptimalNumberList.Count -gt ($i + 1))) {
+                if (($count -eq $OptimalNumberList[$i + $OptimalNumberList.count/2]) -and ($OptimalNumberList.Count -gt ($i + $OptimalNumberList.count/2 + 1))) {
                     # Trigger another Pipeline
                     $i+=1; $retry = 0; $count = 0
                     While ($retry -lt 3) {
                         $BuildNumber = Trigger-ADOPipeline -OrganizationUrl $OrganizationUrl -AzureDevOpsProjectName $AzureDevOpsProjectName `
-                            -PipelineName $PipelineName -DevOpsPAT $DevOpsPAT -Branch $Branch -TestLocation $TestLocation -NumberOfImages $OptimalNumberList[$i]
+                            -PipelineName $PipelineName -DevOpsPAT $DevOpsPAT -Branch $Branch -TestLocation $TestLocation -NumberOfImages $OptimalNumberList[$i + $OptimalNumberList.count/2]
                         if ($BuildNumber) {
-                            Write-Host "Info: The pipeline #BuildId $BuildNumber will run $($OptimalNumberList[$i]) images in $TestLocation"
+                            Write-Host "Info: The pipeline #BuildId $BuildNumber will run $($OptimalNumberList[$i + $OptimalNumberList.count/2]) images in $TestLocation"
                             break
                         }
                     }
