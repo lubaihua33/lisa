@@ -24,7 +24,7 @@ Param
 (
 	[string] $AzureSecretsFile,
 	[string] $QueryTableName = "AzureMarketplaceDistroInfo",
-	[string] $UploadTableName = "AzureFleetSmokeTestDistroList",
+	[string] $UploadTableName = "AzureFleetSmokeTestDistroList"
 )
 
 # Read secrets file and terminate if not present.
@@ -46,7 +46,7 @@ $dbuser = $XmlSecrets.secrets.DatabaseUser
 $dbpassword = $XmlSecrets.secrets.DatabasePassword
 $database = $XmlSecrets.secrets.DatabaseName
 
-$SQLQuery="select distinct FullName,Location from $QueryTableName where IsAvailable like '1'"
+$SQLQuery="select distinct FullName from $QueryTableName where IsAvailable like '1'"
 
 if ($server -and $dbuser -and $dbpassword -and $database) {
 	try {
@@ -73,7 +73,8 @@ if ($server -and $dbuser -and $dbpassword -and $database) {
 			$sqlQuery = "insert into $UploadTableName (ARMImage, TestLocation) VALUES ('$ARMImage', '$Location')"
 			$command2 = $connection.CreateCommand()
 			$command2.CommandText = $sqlQuery
-			$command2.executenonquery()
+			$null = $command2.executenonquery()
+			Write-Host "$ARMImage $Location is inserted."
 		}
 	} catch {
 		Write-Host "Error: Failed to Query data from database"
