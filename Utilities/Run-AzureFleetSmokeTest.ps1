@@ -47,20 +47,17 @@ if (!$NumberOfImagesInOnePipeline -or $NumberOfImagesInOnePipeline -eq 0) {
 
 Function Run-SmokeTestbyLISAv3($ARMImage, $TestLocation)
 {
-    Set-Location -Path ".\lsg-lisa\lisa"
- 
+    Set-Location -Path ".\lisa"
+
     $gPublisher = $ARMImage.split(' ')[0]
     $gOffer = $ARMImage.split(' ')[1]
     $gSku = $ARMImage.split(' ')[2]
     $gVersion = $ARMImage.split(' ')[3]
     poetry run python lisa/main.py -r ..\runbook\smoke.yml -v gPublisher:${gPublisher} -v gOffer:${gOffer} -v gSku:${gSku} -v gVersion:${gVersion} -v location:${TestLocation}-v adminPrivateKeyFile:$env:LISA_PRI_SECUREFILEPATH
-    Set-Location Path "..\..\"
+    Set-Location Path "..\"
 }
 
 Function Install-LISAv3() {
-    git clone https://microsoft.visualstudio.com/DefaultCollection/LSG/_git/lsg-lisa
-    Set-Location -Path ".\lsg-lisa"
-    git checkout main
     git submodule init
     git submodule update
 
@@ -78,7 +75,7 @@ Function Install-LISAv3() {
     $secret_file = Split-Path -Path $env:LISA_SECUREFILEPATH -Leaf
     Write-Host "Rename $secret_file to secret.yml"
     Rename-Item -Path "./lsg-lisa/runbook/$secret_file" -NewName "./lsg-lisa/runbook/secret.yml"
-    Set-Location Path "..\..\"
+    Set-Location Path "..\"
 }
 
 Install-LISAv3
