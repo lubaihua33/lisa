@@ -80,7 +80,9 @@ Function Install-LISAv3() {
 
     $secret_file = Split-Path -Path $env:LISA_SECUREFILEPATH -Leaf
     Write-Host "Rename $secret_file to secret.yml"
-    Rename-Item -Path "./runbook/$secret_file" -NewName "./runbook/secret.yml"
+    Set-Location -Path ".\runbook"
+    Rename-Item -Path "$secret_file" -NewName "secret.yml"
+    Set-Location -Path "..\"
 }
 
 Write-Host "Info: Install LISAv3..."
