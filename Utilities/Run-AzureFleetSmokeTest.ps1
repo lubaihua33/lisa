@@ -120,9 +120,8 @@ if ($server -and $dbuser -and $dbpassword -and $database) {
                 Write-Host "Update $QueryTableName RunStatus to 'DONE' where ARMImage is $ARMImage"
                 $count += 1
             }
-            Start-Sleep -Seconds 10
             $retry += 1
-            if ($retry -gt 180) {
+            if ($retry -gt 30) {
                 Write-Host "Error: The number of 'DONE' images is not equal to $NumberOfImagesInOnePipeline"
                 break
             }

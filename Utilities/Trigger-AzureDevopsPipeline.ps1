@@ -26,13 +26,12 @@ Documentation
 ###############################################################################################
 Param
 (
-    [Parameter(Mandatory = $true)][String]$OrganizationUrl,
-    [Parameter(Mandatory = $true)][String]$AzureDevOpsProjectName,
-    [Parameter(Mandatory = $true)][String]$DevOpsPAT,
-    [Parameter(Mandatory = $true)][String]$PipelineName,
-    [Parameter(Mandatory = $false)][String]$Branch,
-    [Parameter(Mandatory = $false)][String]$Description = "Automatically triggered release",
-    [Parameter(Mandatory = $true)] $AzureSecretsFile,
+    [String] $OrganizationUrl,
+    [String] $AzureDevOpsProjectName,
+    [String] $DevOpsPAT,
+    [String] $PipelineName,
+    [String] $Branch,
+    [String] $AzureSecretsFile,
     [string] $QueryTableName = "AzureFleetSmokeTestDistroList",
     [int] $SuggestedNumber = 700
 )
@@ -100,32 +99,16 @@ Function Trigger-ADOPipeline($OrganizationUrl, $AzureDevOpsProjectName, $DevOpsP
 # $TotalNumber = 2890, $SuggestedNumber = 700
 # $OptimalNumberList = (722,722,722,724)
 Function Get-OptimalNumberInOnePipeline([int]$TotalNumber, [int]$SuggestedNumber) {
-    $OptimalNumberList = [System.Collections.ArrayList]@()
-    $Remainder = [math]::floor($TotalNumber % $SuggestedNumber)
-    $Quotient = [math]::floor($TotalNumber / $SuggestedNumber)
-    if ($Remainder -eq 0) {
-        for ($i = 0; $i -lt $Quotient; $i++) {
-            $OptimalNumberList.Add($SuggestedNumber)
-        }
-    } elseif ($Remainder -gt 0 -and $Remainder/$Quotient -le $SuggestedNumber/10) {
-        for ($i = 0; $i -lt ($Quotient - 1); $i++) {
-            $OptimalNumberList.Add($SuggestedNumber + [math]::floor($Remainder/$Quotient))
-        }
-        if ($i -eq ($Quotient - 1)) {
-            $OptimalNumberList.Add($SuggestedNumber + [math]::floor($Remainder/$Quotient) +  [math]::floor($Remainder%$Quotient))
-        }
-    } elseif ($Remainder -gt 0 -and $Remainder/$Quotient -gt $SuggestedNumber/10) {
-        # Add one to list count
-        $Quotient += 1
-        for ($i = 0; $i -lt ($Quotient - 1); $i++) {
-            $OptimalNumberList.Add([math]::floor($TotalNumber/$Quotient))
-        }
-        if ($i -eq ($Quotient - 1)) {
-            $OptimalNumberList.Add([math]::floor($TotalNumber/$Quotient) +  [math]::floor($TotalNumber%$Quotient))
-        }
-    } else {
-        Write-Host "Error: Remainder is $Remainder"
+    $OptimalNumberList = New-Object System.Collections.ArrayList
+    $PipelineNumber = [math]::ceiling($TotalNumber/$SuggestedNumber/1.1)
+
+    for ($i = 0; $i -lt ($PipelineNumber - 1); $i++) {
+        $OptimalNumberList.Add([math]::floor($TotalNumber/$PipelineNumber)) | Out-Null
     }
+    if ($i -eq ($PipelineNumber - 1)) {
+        $OptimalNumberList.Add([math]::floor($TotalNumber/$PipelineNumber) +  $TotalNumber%$PipelineNumber) | Out-Null
+    }
+
     Write-Host "Info: OptimalNumberList is $OptimalNumberList"
     return $OptimalNumberList
 }
@@ -169,9 +152,9 @@ if ($server -and $dbuser -and $dbpassword -and $database) {
             $i = 0; $count = 0; $retry = 0
             While ($retry -lt 3) {
                 $BuildNumber = Trigger-ADOPipeline -OrganizationUrl $OrganizationUrl -AzureDevOpsProjectName $AzureDevOpsProjectName `
-                    -PipelineName $PipelineName -DevOpsPAT $DevOpsPAT -Branch $Branch -TestLocation $TestLocation -NumberOfImages $OptimalNumberList[$i + $OptimalNumberList.count/2]
+                    -PipelineName $PipelineName -DevOpsPAT $DevOpsPAT -Branch $Branch -TestLocation $TestLocation -NumberOfImages $OptimalNumberList[$i]
                 if ($BuildNumber) {
-                    Write-Host "Info: The pipeline #BuildId $BuildNumber will run $($OptimalNumberList[$i + $OptimalNumberList.count/2]) images in $TestLocation"
+                    Write-Host "Info: The pipeline #BuildId $BuildNumber will run $($OptimalNumberList[$i]) images in $TestLocation"
                     break
                 }
             }
@@ -192,14 +175,14 @@ if ($server -and $dbuser -and $dbpassword -and $database) {
                 $command3.CommandText = $sqlQuery
                 $null = $command3.executenonquery()
                 $count += 1
-                if (($count -eq $OptimalNumberList[$i + $OptimalNumberList.count/2]) -and ($OptimalNumberList.Count -gt ($i + $OptimalNumberList.count/2 + 1))) {
+                if (($count -eq $OptimalNumberList[$i]) -and ($OptimalNumberList.Count -gt ($i + 1))) {
                     # Trigger another Pipeline
                     $i+=1; $retry = 0; $count = 0
                     While ($retry -lt 3) {
                         $BuildNumber = Trigger-ADOPipeline -OrganizationUrl $OrganizationUrl -AzureDevOpsProjectName $AzureDevOpsProjectName `
-                            -PipelineName $PipelineName -DevOpsPAT $DevOpsPAT -Branch $Branch -TestLocation $TestLocation -NumberOfImages $OptimalNumberList[$i + $OptimalNumberList.count/2]
+                            -PipelineName $PipelineName -DevOpsPAT $DevOpsPAT -Branch $Branch -TestLocation $TestLocation -NumberOfImages $OptimalNumberList[$i]
                         if ($BuildNumber) {
-                            Write-Host "Info: The pipeline #BuildId $BuildNumber will run $($OptimalNumberList[$i + $OptimalNumberList.count/2]) images in $TestLocation"
+                            Write-Host "Info: The pipeline #BuildId $BuildNumber will run $($OptimalNumberList[$i]) images in $TestLocation"
                             break
                         }
                     }
