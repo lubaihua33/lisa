@@ -57,7 +57,7 @@ Function Run-SmokeTestbyLISAv3($ARMImage, $TestLocation)
     $gSku = $ARMImage.split(' ')[2]
     $gVersion = $ARMImage.split(' ')[3]
     poetry run python lisa/main.py -r ..\runbook\smoke.yml -v gPublisher:${gPublisher} -v gOffer:${gOffer} -v gSku:${gSku} -v gVersion:${gVersion} -v location:${TestLocation}-v adminPrivateKeyFile:$env:LISA_PRI_SECUREFILEPATH
-    Set-Location Path "..\"
+    Set-Location -Path "..\"
 }
 
 Function Install-LISAv3() {
@@ -73,7 +73,7 @@ Function Install-LISAv3() {
     Set-Location -Path ".\lisa"
     poetry install
     Write-Host "Info: Change directory ..\"
-    Set-Location Path "..\"
+    Set-Location -Path "..\"
 
     Write-Host "Copy secret file from $env:LISA_SECUREFILEPATH to ./runbook"
     Copy-Item -Path $env:LISA_SECUREFILEPATH  -Destination "./runbook" -Force
