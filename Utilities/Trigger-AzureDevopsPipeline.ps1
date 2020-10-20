@@ -101,6 +101,7 @@ Function Trigger-Pipeline ($TestLocation, $NumberOfImages) {
             Write-Host "Info: The pipeline #BuildId $buildnumber will run $($numberlist[$i]) images in $location"
             break
         }
+        retry += 1
     }
     return $buildnumber
 }
@@ -141,13 +142,13 @@ if ($server -and $dbuser -and $dbpassword -and $database) {
         $connection.Open()
         $dataset = new-object "System.Data.Dataset"
         $dataadapter = new-object "System.Data.SqlClient.SqlDataAdapter" ($sql, $connection)
-        $dataadapter.Fill($dataset)
+        $null = $dataadapter.Fill($dataset)
         foreach ($row in $dataset.Tables.rows) {
             $location = $row.TestLocation
             $sql = "select count(ARMImage) from $QueryTableName where TestLocation like '$location' and BuildID is NULL and RunStatus is NULL"
             $dataset_count = new-object "System.Data.Dataset"
             $dataadapter = new-object "System.Data.SqlClient.SqlDataAdapter" ($sql, $connection)
-            $dataadapter.Fill($dataset_count)
+            $null = $dataadapter.Fill($dataset_count)
             $totalnumber = $dataset_count.Tables.rows[0]
             if ($totalnumber -eq 0) {
                 Write-Host "Info: No image in the location: $location"
@@ -168,7 +169,7 @@ if ($server -and $dbuser -and $dbpassword -and $database) {
             $sql = "select ARMImage from $QueryTableName where TestLocation like '$location' and BuildID is NULL and RunStatus is NULL"
             $dataset_image = new-object "System.Data.Dataset"
             $dataadapter = new-object "System.Data.SqlClient.SqlDataAdapter" ($sql, $connection)
-            $dataadapter.Fill($dataset_image)
+            $null = $dataadapter.Fill($dataset_image)
             foreach ($row in $dataset_image.Tables.rows) {
                 $image = $row.ARMImage
                 $sql = "Update $QueryTableName Set BuildID=$buildnumber, RunStatus='START' where ARMImage like '$image'"

@@ -108,13 +108,13 @@ if ($server -and $dbuser -and $dbpassword -and $database) {
         While ($count -ne $NumberOfImagesInOnePipeline) {
             $dataset = new-object "System.Data.Dataset"
             $dataadapter = new-object "System.Data.SqlClient.SqlDataAdapter" ($sql, $connection)
-            $dataadapter.Fill($dataset)
+            $null = $dataadapter.Fill($dataset)
             foreach ($row in $dataset.Tables.rows) {
                 $image = $row.ARMImage
                 Run-SmokeTestbyLISAv3 -ARMImage $image -TestLocation $TestLocation
                 $sql = "Update $QueryTableName Set RunStatus='DONE' where ARMImage like '$image'"
                 $command = $connection.CreateCommand()
-                $command.CommandText = $sqlCommand
+                $command.CommandText = $sql
                 $null = $command.executenonquery()
                 Write-Host "Update $QueryTableName RunStatus to 'DONE' where ARMImage is $image"
                 $count += 1

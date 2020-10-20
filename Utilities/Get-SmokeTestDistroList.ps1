@@ -56,13 +56,13 @@ if ($server -and $dbuser -and $dbpassword -and $database) {
 		$connection.Open()		
 		$dataset = new-object "System.Data.Dataset"
 		$dataadapter = new-object "System.Data.SqlClient.SqlDataAdapter" ($sql, $connection)
-		$dataadapter.Fill($dataset)
+		$null = $dataadapter.Fill($dataset)
 		foreach ($row in $dataset.Tables.rows) {
 			$image = $row.FullName
 			$sql = "select Location from $QueryTableName where FullName like '$image'"
 			$dataset_location = new-object "System.Data.Dataset"
 			$dataadapter = new-object "System.Data.SqlClient.SqlDataAdapter" ($sql, $connection)
-			$dataadapter.Fill($dataset_location)
+			$null = $dataadapter.Fill($dataset_location)
 			if ($dataset_location.Tables.rows) {
 				$location = $dataset_location.Tables.rows[0].Location
 			} else {

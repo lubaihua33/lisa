@@ -107,7 +107,7 @@ if ($server -and $dbuser -and $dbpassword -and $database) {
                 Run-SmokeTestbyLISAv3 -ARMImage $image -TestLocation $TestLocation
                 $sql = "Update $QueryTableName Set RunStatus='DONE' where ARMImage like '$image'"
                 $command = $connection.CreateCommand()
-                $command.CommandText = $sqlCommand
+                $command.CommandText = $sql
                 $null = $command.executenonquery()
                 Write-Host "Update $QueryTableName RunStatus to 'DONE' where ARMImage is $image"
             }
