@@ -27,6 +27,7 @@ Param
 )
 
 # Read secrets file and terminate if not present.
+Write-Host "Info: Check the Azure Secrets File..."
 if (![String]::IsNullOrEmpty($AzureSecretsFile) -and (Test-Path -Path $AzureSecretsFile)) {
     $Secrets = ([xml](Get-Content $AzureSecretsFile))
 } else {
@@ -39,6 +40,7 @@ if ((![String]::IsNullOrEmpty($Secrets)) -and (![String]::IsNullOrEmpty($Secrets
     Write-Host "Secrets file not found. Exiting."
     exit 1
 }
+Write-Host "Info: Check the Azure Secrets File OK"
 
 if (!$NumberOfImagesInOnePipeline -or $NumberOfImagesInOnePipeline -eq 0) {
     Write-Host "Error: NumberOfImagesInOnePipeline is NULL or is zero."
@@ -47,6 +49,7 @@ if (!$NumberOfImagesInOnePipeline -or $NumberOfImagesInOnePipeline -eq 0) {
 
 Function Run-SmokeTestbyLISAv3($ARMImage, $TestLocation)
 {
+    Write-Host "Info: Run smoke test for $ARMImage in $TestLocation"
     Set-Location -Path ".\lisa"
 
     $gPublisher = $ARMImage.split(' ')[0]
@@ -66,18 +69,21 @@ Function Install-LISAv3() {
     $env:PATH += ";$env:USERPROFILE\.poetry\bin"
     poetry self update --preview 1.1.0b4
 
+    Write-Host "Info: Change directory .\lisa"
     Set-Location -Path ".\lisa"
     poetry install
+    Write-Host "Info: Change directory ..\"
+    Set-Location Path "..\"
 
-    Write-Host "Copy secret file from $env:LISA_SECUREFILEPATH to ./lsg-lisa/runbook"
-    Copy-Item -Path $env:LISA_SECUREFILEPATH  -Destination "./lsg-lisa/runbook" -Force
+    Write-Host "Copy secret file from $env:LISA_SECUREFILEPATH to ./runbook"
+    Copy-Item -Path $env:LISA_SECUREFILEPATH  -Destination "./runbook" -Force
 
     $secret_file = Split-Path -Path $env:LISA_SECUREFILEPATH -Leaf
     Write-Host "Rename $secret_file to secret.yml"
-    Rename-Item -Path "./lsg-lisa/runbook/$secret_file" -NewName "./lsg-lisa/runbook/secret.yml"
-    Set-Location Path "..\"
+    Rename-Item -Path "./runbook/$secret_file" -NewName "./runbook/secret.yml"
 }
 
+Write-Host "Info: Install LISAv3..."
 Install-LISAv3
 
 $BuildNumber = $env:BUILD_BUILDNUMBER
