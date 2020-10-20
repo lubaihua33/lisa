@@ -92,6 +92,19 @@ Function Trigger-ADOPipeline($OrganizationUrl, $AzureDevOpsProjectName, $DevOpsP
     }
 }
 
+Function Trigger-Pipeline ($TestLocation, $NumberOfImages) {
+    $retry = 0
+    While ($retry -lt 3) {
+        $buildnumber = Trigger-ADOPipeline -OrganizationUrl $OrganizationUrl -AzureDevOpsProjectName $AzureDevOpsProjectName `
+            -PipelineName $PipelineName -DevOpsPAT $DevOpsPAT -Branch $Branch -TestLocation $location -NumberOfImages $numberlist[$i]
+        if ($buildnumber) {
+            Write-Host "Info: The pipeline #BuildId $buildnumber will run $($numberlist[$i]) images in $location"
+            break
+        }
+    }
+    return $buildnumber
+}
+
 # $TotalNumber = 1600, $SuggestedNumber = 700
 # $OptimalNumberList = (533,533,534)
 # $TotalNumber = 1500, $SuggestedNumber = 700
@@ -118,75 +131,56 @@ $dbuser = $XmlSecrets.secrets.DatabaseUser
 $dbpassword = $XmlSecrets.secrets.DatabasePassword
 $database = $XmlSecrets.secrets.DatabaseName
 
-$SQLQuery="select distinct TestLocation from $QueryTableName"
-
+$sql = "select distinct TestLocation from $QueryTableName"
 if ($server -and $dbuser -and $dbpassword -and $database) {
     try {
-        Write-Host "Info: SQLQuery:  $SQLQuery"
+        Write-Host "Info: SQLQuery: $sql"
         $connectionString = "Server=$server;uid=$dbuser; pwd=$dbpassword;Database=$database;Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;MultipleActiveResultSets=True;"
         $connection = New-Object System.Data.SqlClient.SqlConnection
         $connection.ConnectionString = $connectionString
         $connection.Open()
-        $command = $connection.CreateCommand()
-        $command.CommandText = $SQLQuery
-        $reader = $command.ExecuteReader()
-        # Loop TestLocation
-        While ($reader.read()) {
-            $TestLocation = $reader.GetValue($reader.GetOrdinal("TestLocation"))
-            $SQLQuery="select count(ARMImage) from $QueryTableName where TestLocation like '$TestLocation' and BuildID is NULL and RunStatus is NULL"
-            $command1 = $connection.CreateCommand()
-            $command1.CommandText = $SQLQuery
-            $reader1 = $command1.ExecuteReader()
-            if ($reader1.read()) {
-                $TotalNumber = $reader1.GetValue(0)
-            } else {
-                Write-Host "Error: SQLQuery: $SQLQuery"
-            }
-            if ($TotalNumber -eq 0) {
-                Write-Host "Info: No image in the location:  $TestLocation"
+        $dataset = new-object "System.Data.Dataset"
+        $dataadapter = new-object "System.Data.SqlClient.SqlDataAdapter" ($sql, $connection)
+        $dataadapter.Fill($dataset)
+        foreach ($row in $dataset.Tables.rows) {
+            $location = $row.TestLocation
+            $sql = "select count(ARMImage) from $QueryTableName where TestLocation like '$location' and BuildID is NULL and RunStatus is NULL"
+            $dataset_count = new-object "System.Data.Dataset"
+            $dataadapter = new-object "System.Data.SqlClient.SqlDataAdapter" ($sql, $connection)
+            $dataadapter.Fill($dataset_count)
+            $totalnumber = $dataset_count.Tables.rows[0]
+            if ($totalnumber -eq 0) {
+                Write-Host "Info: No image in the location: $location"
                 continue
             }
-            $OptimalNumberList = [System.Collections.ArrayList](Get-OptimalNumberInOnePipeline -TotalNumber $TotalNumber -SuggestedNumber $SuggestedNumber)
+
+            $numberlist = Get-OptimalNumberInOnePipeline -TotalNumber $totalnumber -SuggestedNumber $SuggestedNumber
 
             # Trigger ADO pipeline
-            $i = 0; $count = 0; $retry = 0
-            While ($retry -lt 3) {
-                $BuildNumber = Trigger-ADOPipeline -OrganizationUrl $OrganizationUrl -AzureDevOpsProjectName $AzureDevOpsProjectName `
-                    -PipelineName $PipelineName -DevOpsPAT $DevOpsPAT -Branch $Branch -TestLocation $TestLocation -NumberOfImages $OptimalNumberList[$i]
-                if ($BuildNumber) {
-                    Write-Host "Info: The pipeline #BuildId $BuildNumber will run $($OptimalNumberList[$i]) images in $TestLocation"
-                    break
-                }
-            }
-            if (!$BuildNumber) {
+            $i = 0; $count = 0;
+            $buildnumber = Trigger-Pipeline -TestLocation $location -NumberOfImages $numberlist[$i]
+            if (!$buildnumber) {
                 Write-Host "Error: Failed to Trigger ADO pipeline. Exit.."
                 exit 1
             }
 
-            # Loop ARMImage on the TestLocation, then set the BuildID and RunStatus
-            $SQLQuery="select * from $QueryTableName where TestLocation like '$TestLocation' and BuildID is NULL and RunStatus is NULL"
-            $command2 = $connection.CreateCommand()
-            $command2.CommandText = $SQLQuery
-            $reader2 = $command2.ExecuteReader()
-            while ($reader2.read()) {
-                $ARMImage = $reader2.GetValue($reader2.GetOrdinal("ARMImage"))
-                $SQLQuery = "Update $QueryTableName Set BuildID=$BuildNumber, RunStatus='START' where ARMImage like '$ARMImage'"
-                $command3= $connection.CreateCommand()
-                $command3.CommandText = $sqlQuery
-                $null = $command3.executenonquery()
+            # Loop ARMImage, then update BuildID and RunStatus
+            $sql = "select ARMImage from $QueryTableName where TestLocation like '$location' and BuildID is NULL and RunStatus is NULL"
+            $dataset_image = new-object "System.Data.Dataset"
+            $dataadapter = new-object "System.Data.SqlClient.SqlDataAdapter" ($sql, $connection)
+            $dataadapter.Fill($dataset_image)
+            foreach ($row in $dataset_image.Tables.rows) {
+                $image = $row.ARMImage
+                $sql = "Update $QueryTableName Set BuildID=$buildnumber, RunStatus='START' where ARMImage like '$image'"
+                $command= $connection.CreateCommand()
+                $command.CommandText = $sql
+                $null = $command.executenonquery()
                 $count += 1
-                if (($count -eq $OptimalNumberList[$i]) -and ($OptimalNumberList.Count -gt ($i + 1))) {
+                if (($count -eq $numberlist[$i]) -and ($numberlist.Count -gt ($i + 1))) {
                     # Trigger another Pipeline
-                    $i+=1; $retry = 0; $count = 0
-                    While ($retry -lt 3) {
-                        $BuildNumber = Trigger-ADOPipeline -OrganizationUrl $OrganizationUrl -AzureDevOpsProjectName $AzureDevOpsProjectName `
-                            -PipelineName $PipelineName -DevOpsPAT $DevOpsPAT -Branch $Branch -TestLocation $TestLocation -NumberOfImages $OptimalNumberList[$i]
-                        if ($BuildNumber) {
-                            Write-Host "Info: The pipeline #BuildId $BuildNumber will run $($OptimalNumberList[$i]) images in $TestLocation"
-                            break
-                        }
-                    }
-                    if (!$BuildNumber) {
+                    $i+=1; $count = 0
+                    $buildnumber = Trigger-Pipeline -TestLocation $location -NumberOfImages $numberlist[$i]
+                    if (!$buildnumber) {
                         Write-Host "Error: Failed to Trigger ADO pipeline. Exit.."
                         exit 1
                     }

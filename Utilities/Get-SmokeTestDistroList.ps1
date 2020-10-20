@@ -46,35 +46,35 @@ $dbuser = $XmlSecrets.secrets.DatabaseUser
 $dbpassword = $XmlSecrets.secrets.DatabasePassword
 $database = $XmlSecrets.secrets.DatabaseName
 
-$SQLQuery="select distinct FullName from $QueryTableName where IsAvailable like '1'"
-
+$sql = "select distinct FullName from $QueryTableName where IsAvailable like '1'"
 if ($server -and $dbuser -and $dbpassword -and $database) {
 	try {
-		Write-Host "Info: SQLQuery:  $SQLQuery"
+		Write-Host "Info: SQLQuery:  $sql"
 		$connectionString = "Server=$server;uid=$dbuser; pwd=$dbpassword;Database=$database;Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;MultipleActiveResultSets=True;"
 		$connection = New-Object System.Data.SqlClient.SqlConnection
 		$connection.ConnectionString = $connectionString
-		$connection.Open()
-		$command = $connection.CreateCommand()
-		$command.CommandText = $SQLQuery
-		$reader = $command.ExecuteReader()
-		While ($reader.read()) {
-			$ARMImage = $reader.GetValue($reader.GetOrdinal("FullName"))
-			$SQLQuery="select * from $QueryTableName where FullName like '$ARMImage'"
-			$command1 = $connection.CreateCommand()
-			$command1.CommandText = $SQLQuery
-			$reader1 = $command1.ExecuteReader()
-			if ($reader1.read()) {
-				$Location = $reader1.GetValue($reader1.GetOrdinal("Location"))
+		$connection.Open()		
+		$dataset = new-object "System.Data.Dataset"
+		$dataadapter = new-object "System.Data.SqlClient.SqlDataAdapter" ($sql, $connection)
+		$dataadapter.Fill($dataset)
+		foreach ($row in $dataset.Tables.rows) {
+			$image = $row.FullName
+			$sql = "select Location from $QueryTableName where FullName like '$image'"
+			$dataset_location = new-object "System.Data.Dataset"
+			$dataadapter = new-object "System.Data.SqlClient.SqlDataAdapter" ($sql, $connection)
+			$dataadapter.Fill($dataset_location)
+			if ($dataset_location.Tables.rows) {
+				$location = $dataset_location.Tables.rows[0].Location
 			} else {
-				Write-Host "Error: No this Image $ARMImage in $QueryTableName"
+				Write-Host "Error: No this Image $image in $QueryTableName"
 				continue
 			}
-			$sqlQuery = "insert into $UploadTableName (ARMImage, TestLocation) VALUES ('$ARMImage', '$Location')"
-			$command2 = $connection.CreateCommand()
-			$command2.CommandText = $sqlQuery
-			$null = $command2.executenonquery()
-			Write-Host "$ARMImage $Location is inserted."
+			# Insert record
+			$sql = "insert into $UploadTableName (ARMImage, TestLocation) VALUES ('$image', '$location')"
+			$command = $connection.CreateCommand()
+			$command.CommandText = $sql
+			$null = $command.executenonquery()
+			Write-Host "$image $location is inserted."
 		}
 	} catch {
 		Write-Host "Error: Failed to Query data from database"

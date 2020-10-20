@@ -15,7 +15,7 @@ Documentation
     Purpose/Change:
 
 .EXAMPLE
-    Run-AzureFleetSmokeTest.ps1 -TestLocation "eastus"
+    Run-AzureFleetSmokeTest.ps1 -TestLocation "eastus" -NumberOfImagesInOnePipeline 700
 #>
 ###############################################################################################
 Param
@@ -23,6 +23,7 @@ Param
     [string] $AzureSecretsFile,
     [string] $QueryTableName = "AzureFleetSmokeTestDistroList",
     [string] $TestLocation,
+    [int] $NumberOfImagesInOnePipeline
 )
 
 # Read secrets file and terminate if not present.
@@ -40,6 +41,11 @@ if ((![String]::IsNullOrEmpty($Secrets)) -and (![String]::IsNullOrEmpty($Secrets
     exit 1
 }
 Write-Host "Info: Check the Azure Secrets File OK"
+
+if (!$NumberOfImagesInOnePipeline -or $NumberOfImagesInOnePipeline -eq 0) {
+    Write-Host "Error: NumberOfImagesInOnePipeline is NULL or is zero."
+    exit 1
+}
 
 Function Run-SmokeTestbyLISAv3($ARMImage, $TestLocation)
 {
@@ -83,7 +89,7 @@ Write-Host "Info: Install LISAv3..."
 Install-LISAv3
 
 $BuildNumber = $env:BUILD_BUILDNUMBER
-$sql = "select ARMImage from $QueryTableName where BuildID like '$BuildNumber' and RunStatus like 'START' and TestLocation like '$TestLocation'"
+$sql ="select ARMImage from $QueryTableName where BuildID like '$BuildNumber' and RunStatus like 'START' and TestLocation like '$TestLocation'"
 
 $server = $XmlSecrets.secrets.DatabaseServer
 $dbuser = $XmlSecrets.secrets.DatabaseUser
@@ -97,11 +103,12 @@ if ($server -and $dbuser -and $dbpassword -and $database) {
         $connection = New-Object System.Data.SqlClient.SqlConnection
         $connection.ConnectionString = $connectionString
         $connection.Open()
+        $count = 0
         $retry = 0
-        While ($true) {
+        While ($count -ne $NumberOfImagesInOnePipeline) {
             $dataset = new-object "System.Data.Dataset"
             $dataadapter = new-object "System.Data.SqlClient.SqlDataAdapter" ($sql, $connection)
-            $recordcount = $dataadapter.Fill($dataset)
+            $dataadapter.Fill($dataset)
             foreach ($row in $dataset.Tables.rows) {
                 $image = $row.ARMImage
                 Run-SmokeTestbyLISAv3 -ARMImage $image -TestLocation $TestLocation
@@ -110,12 +117,11 @@ if ($server -and $dbuser -and $dbpassword -and $database) {
                 $command.CommandText = $sqlCommand
                 $null = $command.executenonquery()
                 Write-Host "Update $QueryTableName RunStatus to 'DONE' where ARMImage is $image"
+                $count += 1
             }
-            if ($recordcount -eq 0) {
-                Start-Sleep -Seconds 5
-                $retry += 1
-            }
-            if ($retry -gt 3) {
+            $retry += 1
+            if ($retry -gt 30) {
+                Write-Host "Error: The number of 'DONE' images is not equal to $NumberOfImagesInOnePipeline"
                 break
             }
         }
