@@ -134,7 +134,7 @@ $database = $XmlSecrets.secrets.DatabaseName
 
 $sql = "select distinct TestLocation from $QueryTableName"
 if ($server -and $dbuser -and $dbpassword -and $database) {
-    try {
+    #try {
         Write-Host "Info: SQLQuery: $sql"
         $connectionString = "Server=$server;uid=$dbuser; pwd=$dbpassword;Database=$database;Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;MultipleActiveResultSets=True;"
         $connection = New-Object System.Data.SqlClient.SqlConnection
@@ -175,7 +175,15 @@ if ($server -and $dbuser -and $dbpassword -and $database) {
                 $sql = "Update $QueryTableName Set BuildID=$buildnumber, RunStatus='START' where ARMImage like '$image'"
                 $command= $connection.CreateCommand()
                 $command.CommandText = $sql
-                $null = $command.executenonquery()
+                $retry = 0
+                while ($retry -lt 3) {
+                    $retry++
+                    $ret = $command.executenonquery()
+                    if ($ret -eq 1) {
+                        break
+                    }
+                    Write-Host "Error: Failed to update into database. Retry $retry"
+                }
                 $count += 1
                 if (($count -eq $numberlist[$i]) -and ($numberlist.Count -gt ($i + 1))) {
                     # Trigger another Pipeline
@@ -188,16 +196,16 @@ if ($server -and $dbuser -and $dbpassword -and $database) {
                 }
             }
         }
-    } catch {
+    <#} catch {
         Write-Host "Error: Failed to Query data from database"
         $line = $_.InvocationInfo.ScriptLineNumber
         $script_name = ($_.InvocationInfo.ScriptName).Replace($PWD,".")
         $ErrorMessage =  $_.Exception.Message
         Write-Host "Error: EXCEPTION : $ErrorMessage"
         Write-Host "Error: Source : Line $line in script $script_name."
-    } finally {
+    } finally {#>
         $connection.Close()
-    }
+    #}
 } else {
     Write-Host "Error: Database details are not provided."
 }

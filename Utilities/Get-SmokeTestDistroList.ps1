@@ -63,11 +63,9 @@ if ($server -and $dbuser -and $dbpassword -and $database) {
 			$dataset_location = new-object "System.Data.Dataset"
 			$dataadapter = new-object "System.Data.SqlClient.SqlDataAdapter" ($sql, $connection)
 			$null = $dataadapter.Fill($dataset_location)
-			if ($dataset_location.Tables.rows) {
-				$location = $dataset_location.Tables.rows[0].Location
-			} else {
-				Write-Host "Error: No this Image $image in $QueryTableName"
-				continue
+			foreach($row in $dataset_location.Tables.rows) {
+				$location = $row.Location
+				break
 			}
 			# Insert record
 			$sql = "insert into $UploadTableName (ARMImage, TestLocation) VALUES ('$image', '$location')"

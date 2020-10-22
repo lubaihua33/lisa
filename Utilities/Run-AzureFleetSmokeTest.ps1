@@ -22,7 +22,7 @@ Param
 (
     [string] $AzureSecretsFile,
     [string] $QueryTableName = "AzureFleetSmokeTestDistroList",
-    [string] $TestLocation,
+    [string] $TestLocation
 )
 
 # Read secrets file and terminate if not present.
