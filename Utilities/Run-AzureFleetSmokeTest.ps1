@@ -21,7 +21,6 @@ Documentation
 Param
 (
     [string] $AzureSecretsFile,
-    [string] $QueryTableName = "AzureFleetSmokeTestDistroList",
     [string] $TestLocation
 )
 
@@ -83,7 +82,7 @@ Write-Host "Info: Install LISAv3..."
 Install-LISAv3
 
 $BuildNumber = $env:BUILD_BUILDNUMBER
-$sql = "select ARMImage from $QueryTableName where BuildID like '$BuildNumber' and RunStatus like 'START' and TestLocation like '$TestLocation'"
+$sql = "select ARMImage from AzureFleetSmokeTestDistroList where BuildID like '$BuildNumber' and RunStatus like 'START'"
 
 $server = $XmlSecrets.secrets.DatabaseServer
 $dbuser = $XmlSecrets.secrets.DatabaseUser
@@ -105,11 +104,11 @@ if ($server -and $dbuser -and $dbpassword -and $database) {
             foreach ($row in $dataset.Tables.rows) {
                 $image = $row.ARMImage
                 Run-SmokeTestbyLISAv3 -ARMImage $image -TestLocation $TestLocation
-                $sql = "Update $QueryTableName Set RunStatus='DONE' where ARMImage like '$image'"
+                $sql = "Update AzureFleetSmokeTestDistroList Set RunStatus='DONE' where ARMImage='$image'"
                 $command = $connection.CreateCommand()
                 $command.CommandText = $sql
                 $null = $command.executenonquery()
-                Write-Host "Update $QueryTableName RunStatus to 'DONE' where ARMImage is $image"
+                Write-Host "Update AzureFleetSmokeTestDistroList RunStatus to 'DONE' where ARMImage is $image"
             }
             if ($recordcount -eq 0) {
                 Start-Sleep -Seconds 5

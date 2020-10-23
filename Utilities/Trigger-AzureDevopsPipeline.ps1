@@ -32,7 +32,6 @@ Param
     [String] $PipelineName,
     [String] $Branch,
     [String] $AzureSecretsFile,
-    [string] $QueryTableName = "AzureFleetSmokeTestDistroList",
     [int] $SuggestedNumber = 700
 )
 
@@ -67,7 +66,7 @@ Function Trigger-ADOPipeline($OrganizationUrl, $AzureDevOpsProjectName, $DevOpsP
         $runBuildUri = "$($baseUri)$($runBuild)"
         $Build = New-Object PSObject -Property @{
             variables = New-Object PSObject -Property @{
-                TestLocation = New-Object PSObject -Property @{value = $TestLocation}
+                TestLocation   = New-Object PSObject -Property @{value = $TestLocation}
                 NumberOfImages = New-Object PSObject -Property @{value = $NumberOfImages}
             }
         }
@@ -76,9 +75,9 @@ Function Trigger-ADOPipeline($OrganizationUrl, $AzureDevOpsProjectName, $DevOpsP
             $Result = Invoke-RestMethod -Uri $runBuildUri -Method Post -ContentType "application/json" -Headers $DevOpsHeaders -Body $jsonbody;
             return $($Result.id)
         } catch {
-            if($_.ErrorDetails.Message){
+            if ($_.ErrorDetails.Message) {
                 $errorObject = $_.ErrorDetails.Message | ConvertFrom-Json
-                foreach($result in $errorObject.customProperties.ValidationResults){
+                foreach ($result in $errorObject.customProperties.ValidationResults) {
                     Write-Warning $result.message
                 }
                 Write-Error $errorObject.message
@@ -86,8 +85,7 @@ Function Trigger-ADOPipeline($OrganizationUrl, $AzureDevOpsProjectName, $DevOpsP
             throw $_.Exception
         }
         Write-Host "Triggered Build: $($Result.id)"
-    }
-    else {
+    } else {
         Write-Error "Problem occured while getting the build"
     }
 }
@@ -114,13 +112,13 @@ Function Trigger-Pipeline ($TestLocation, $NumberOfImages) {
 # $OptimalNumberList = (722,722,722,724)
 Function Get-OptimalNumberInOnePipeline([int]$TotalNumber, [int]$SuggestedNumber) {
     $OptimalNumberList = New-Object System.Collections.ArrayList
-    $PipelineNumber = [math]::ceiling($TotalNumber/$SuggestedNumber/1.1)
+    $PipelineNumber = [math]::ceiling($TotalNumber / $SuggestedNumber / 1.1)
 
     for ($i = 0; $i -lt ($PipelineNumber - 1); $i++) {
-        $OptimalNumberList.Add([math]::floor($TotalNumber/$PipelineNumber)) | Out-Null
+        $OptimalNumberList.Add([math]::floor($TotalNumber / $PipelineNumber)) | Out-Null
     }
     if ($i -eq ($PipelineNumber - 1)) {
-        $OptimalNumberList.Add([math]::floor($TotalNumber/$PipelineNumber) +  $TotalNumber%$PipelineNumber) | Out-Null
+        $OptimalNumberList.Add([math]::floor($TotalNumber / $PipelineNumber) + $TotalNumber % $PipelineNumber) | Out-Null
     }
 
     Write-Host "Info: OptimalNumberList is $OptimalNumberList"
@@ -131,81 +129,76 @@ $server = $XmlSecrets.secrets.DatabaseServer
 $dbuser = $XmlSecrets.secrets.DatabaseUser
 $dbpassword = $XmlSecrets.secrets.DatabasePassword
 $database = $XmlSecrets.secrets.DatabaseName
-
-$sql = "select distinct TestLocation from $QueryTableName"
+$sql = "select distinct TestLocation from AzureFleetSmokeTestDistroList"
 if ($server -and $dbuser -and $dbpassword -and $database) {
-    #try {
-        Write-Host "Info: SQLQuery: $sql"
-        $connectionString = "Server=$server;uid=$dbuser; pwd=$dbpassword;Database=$database;Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;MultipleActiveResultSets=True;"
-        $connection = New-Object System.Data.SqlClient.SqlConnection
-        $connection.ConnectionString = $connectionString
-        $connection.Open()
-        $dataset = new-object "System.Data.Dataset"
+    try {
+    Write-Host "Info: SQLQuery: $sql"
+    $connectionString = "Server=$server;uid=$dbuser; pwd=$dbpassword;Database=$database;Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;MultipleActiveResultSets=True;"
+    $connection = New-Object System.Data.SqlClient.SqlConnection
+    $connection.ConnectionString = $connectionString
+    $connection.Open()
+    $dataset = new-object "System.Data.Dataset"
+    $dataadapter = new-object "System.Data.SqlClient.SqlDataAdapter" ($sql, $connection)
+    $null = $dataadapter.Fill($dataset)
+    foreach ($row in $dataset.Tables.rows) {
+        $location = $row.TestLocation
+        $sql = "select count(ARMImage) from AzureFleetSmokeTestDistroList where TestLocation like '$location' and BuildID is NULL and RunStatus is NULL"
+        $dataset_count = new-object "System.Data.Dataset"
         $dataadapter = new-object "System.Data.SqlClient.SqlDataAdapter" ($sql, $connection)
-        $null = $dataadapter.Fill($dataset)
-        foreach ($row in $dataset.Tables.rows) {
-            $location = $row.TestLocation
-            $sql = "select count(ARMImage) from $QueryTableName where TestLocation like '$location' and BuildID is NULL and RunStatus is NULL"
-            $dataset_count = new-object "System.Data.Dataset"
-            $dataadapter = new-object "System.Data.SqlClient.SqlDataAdapter" ($sql, $connection)
-            $null = $dataadapter.Fill($dataset_count)
-            $totalnumber = $dataset_count.Tables.rows[0]
-            if ($totalnumber -eq 0) {
-                Write-Host "Info: No image in the location: $location"
+        $null = $dataadapter.Fill($dataset_count)
+        $totalnumber = $dataset_count.Tables.rows[0]
+        if ($totalnumber -eq 0) {
+            Write-Host "Info: No image in the location: $location"
+            continue
+        }
+
+        $numberlist = Get-OptimalNumberInOnePipeline -TotalNumber $totalnumber -SuggestedNumber $SuggestedNumber
+
+        # Trigger ADO pipeline
+        $i = 0;
+        $buildnumber = Trigger-Pipeline -TestLocation $location -NumberOfImages $numberlist[$i]
+        if (!$buildnumber) {
+            Write-Host "Error: Failed to Trigger ADO pipeline. Exit.."
+            exit 1
+        }
+
+        # Update BuildID and RunStatus
+        while ($true) {
+            Write-Host "Info: Updating list[$i] $($numberlist[$i]) records into AzureFleetSmokeTestDistroList..."
+            $sql = "Update AzureFleetSmokeTestDistroList top ($($numberlist[$i])) Set BuildID=$buildnumber, RunStatus='START' where TestLocation=$location and BuildID is NULL and RunStatus is NULL " 
+            $command = $connection.CreateCommand()
+            $command.CommandText = $sql
+            $ret = $command.executenonquery()
+            if ($ret -gt 0) {
+                Write-Host "Info: Updated $ret records successfully."
+            } else {
+                Write-Host "ERROR: Failed to update AzureFleetSmokeTestDistroList"
                 continue
             }
 
-            $numberlist = Get-OptimalNumberInOnePipeline -TotalNumber $totalnumber -SuggestedNumber $SuggestedNumber
-
-            # Trigger ADO pipeline
-            $i = 0; $count = 0;
+            $i += 1;
+            if ($i -eq $numberlist.Count) {
+                Write-Host "Info: All the ARMImage in $location are assigned to pipeline for testing"
+                break
+            }
             $buildnumber = Trigger-Pipeline -TestLocation $location -NumberOfImages $numberlist[$i]
             if (!$buildnumber) {
                 Write-Host "Error: Failed to Trigger ADO pipeline. Exit.."
                 exit 1
             }
-
-            # Loop ARMImage, then update BuildID and RunStatus
-            $sql = "select ARMImage from $QueryTableName where TestLocation like '$location' and BuildID is NULL and RunStatus is NULL"
-            $dataset_image = new-object "System.Data.Dataset"
-            $dataadapter = new-object "System.Data.SqlClient.SqlDataAdapter" ($sql, $connection)
-            $null = $dataadapter.Fill($dataset_image)
-            foreach ($row in $dataset_image.Tables.rows) {
-                $image = $row.ARMImage
-                $sql = "Update $QueryTableName Set BuildID=$buildnumber, RunStatus='START' where ARMImage like '$image'"
-                $command= $connection.CreateCommand()
-                $command.CommandText = $sql
-                $retry = 0
-                while ($retry -lt 3) {
-                    $retry++
-                    $ret = $command.executenonquery()
-                    if ($ret -eq 1) {
-                        break
-                    }
-                    Write-Host "Error: Failed to update into database. Retry $retry"
-                }
-                $count += 1
-                if (($count -eq $numberlist[$i]) -and ($numberlist.Count -gt ($i + 1))) {
-                    # Trigger another Pipeline
-                    $i+=1; $count = 0
-                    $buildnumber = Trigger-Pipeline -TestLocation $location -NumberOfImages $numberlist[$i]
-                    if (!$buildnumber) {
-                        Write-Host "Error: Failed to Trigger ADO pipeline. Exit.."
-                        exit 1
-                    }
-                }
-            }
         }
-    <#} catch {
+    }
+    } catch {
         Write-Host "Error: Failed to Query data from database"
         $line = $_.InvocationInfo.ScriptLineNumber
         $script_name = ($_.InvocationInfo.ScriptName).Replace($PWD,".")
         $ErrorMessage =  $_.Exception.Message
         Write-Host "Error: EXCEPTION : $ErrorMessage"
         Write-Host "Error: Source : Line $line in script $script_name."
-    } finally {#>
-        $connection.Close()
-    #}
-} else {
+    } finally {
+    $connection.Close()
+    }
+}
+else {
     Write-Host "Error: Database details are not provided."
 }
