@@ -143,6 +143,7 @@ if ($server -and $dbuser -and $dbpassword -and $database) {
     foreach ($row in $dataset.Tables.rows) {
         $location = $row.TestLocation
         $sql = "select count(ARMImage) from AzureFleetSmokeTestDistroList where TestLocation like '$location' and BuildID is NULL and RunStatus is NULL"
+        Write-Host "Info: SQLQuery: $sql"
         $dataset_count = new-object "System.Data.Dataset"
         $dataadapter = new-object "System.Data.SqlClient.SqlDataAdapter" ($sql, $connection)
         $null = $dataadapter.Fill($dataset_count)
@@ -150,6 +151,8 @@ if ($server -and $dbuser -and $dbpassword -and $database) {
         if ($totalnumber -eq 0) {
             Write-Host "Info: No image in the location: $location"
             continue
+        } else {
+            Write-Host "Info: $totalnumber images in the location: $location"
         }
 
         $numberlist = Get-OptimalNumberInOnePipeline -TotalNumber $totalnumber -SuggestedNumber $SuggestedNumber
@@ -165,7 +168,7 @@ if ($server -and $dbuser -and $dbpassword -and $database) {
         # Update BuildID and RunStatus
         while ($true) {
             Write-Host "Info: Updating list[$i] $($numberlist[$i]) records into AzureFleetSmokeTestDistroList..."
-            $sql = "Update AzureFleetSmokeTestDistroList top ($($numberlist[$i])) Set BuildID=$buildnumber, RunStatus='START' where TestLocation=$location and BuildID is NULL and RunStatus is NULL " 
+            $sql = "Update top ($($numberlist[$i])) AzureFleetSmokeTestDistroList Set BuildID=$buildnumber, RunStatus='START' where TestLocation='$location' and BuildID is NULL and RunStatus is NULL " 
             Write-Host "Info: $sql"
             $command = $connection.CreateCommand()
             $command.CommandText = $sql
