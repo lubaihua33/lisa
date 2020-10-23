@@ -166,6 +166,7 @@ if ($server -and $dbuser -and $dbpassword -and $database) {
         while ($true) {
             Write-Host "Info: Updating list[$i] $($numberlist[$i]) records into AzureFleetSmokeTestDistroList..."
             $sql = "Update AzureFleetSmokeTestDistroList top ($($numberlist[$i])) Set BuildID=$buildnumber, RunStatus='START' where TestLocation=$location and BuildID is NULL and RunStatus is NULL " 
+            Write-Host "Info: $sql"
             $command = $connection.CreateCommand()
             $command.CommandText = $sql
             $ret = $command.executenonquery()
