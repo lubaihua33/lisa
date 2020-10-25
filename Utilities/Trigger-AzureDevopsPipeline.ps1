@@ -149,7 +149,7 @@ if ($server -and $dbuser -and $dbpassword -and $database) {
         $null = $dataadapter.Fill($dataset_count)
         $totalnumber = $dataset_count.Tables.rows[0]
         if ($totalnumber -eq 0) {
-            Write-Host "Info: No image in the location: $location"
+            Write-Host "Info: No image need test in the location: $location"
             continue
         } else {
             Write-Host "Info: $totalnumber images in the location: $location"
