@@ -50,36 +50,10 @@ Function Run-SmokeTestbyLISAv3($ARMImage, $TestLocation)
     $gOffer = $ARMImage.split(' ')[1]
     $gSku = $ARMImage.split(' ')[2]
     $gVersion = $ARMImage.split(' ')[3]
-    poetry run python lisa/main.py -r ..\runbook\smoke.yml -v gPublisher:${gPublisher} -v gOffer:${gOffer} -v gSku:${gSku} -v gVersion:${gVersion} -v location:${TestLocation} -v adminPrivateKeyFile:"$($env:LISA_PRI_SECUREFILEPATH)"
-    Set-Location -Path "..\"
-}
-Function Install-LISAv3() {
-    git submodule init
-    git submodule update
-
-    Write-Host "Install poetry..."
-    (Invoke-WebRequest -Uri https://raw.githubusercontent.com/python-poetry/poetry/master/get-poetry.py -UseBasicParsing).Content | python - --preview --version 1.1.0b4
-    $env:PATH += ";$env:USERPROFILE\.poetry\bin"
-    poetry self update --preview 1.1.0b4
-
-    Write-Host "Info: Change directory .\lisa"
-    Set-Location -Path ".\lisa"
-    poetry install
-    Write-Host "Info: Change directory ..\"
-    Set-Location -Path "..\"
-
-    Write-Host "Copy secret file from $env:LISA_SECUREFILEPATH to ./runbook"
-    Copy-Item -Path $env:LISA_SECUREFILEPATH  -Destination "./runbook" -Force
-
-    $secret_file = Split-Path -Path $env:LISA_SECUREFILEPATH -Leaf
-    Write-Host "Rename $secret_file to secret.yml"
-    Set-Location -Path ".\runbook"
-    Rename-Item -Path "$secret_file" -NewName "secret.yml"
+    poetry run python lisa/main.py -d -r ..\runbook\smoke.yml -v gPublisher:${gPublisher} -v gOffer:${gOffer} -v gSku:${gSku} -v gVersion:${gVersion} -v location:${TestLocation} -v adminPrivateKeyFile:"$($env:LISA_PRI_SECUREFILEPATH)"
     Set-Location -Path "..\"
 }
 
-Write-Host "Info: Install LISAv3..."
-Install-LISAv3
 
 $BuildNumber = $env:BUILD_BUILDNUMBER
 $sql = "select ARMImage from AzureFleetSmokeTestDistroList where BuildID like '$BuildNumber' and RunStatus like 'START'"
