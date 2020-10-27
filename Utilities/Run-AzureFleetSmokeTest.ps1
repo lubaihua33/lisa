@@ -54,7 +54,6 @@ Function Run-SmokeTestbyLISAv3($ARMImage, $TestLocation)
     Set-Location -Path "..\"
 }
 
-
 $BuildNumber = $env:BUILD_BUILDNUMBER
 $sql = "select ARMImage from AzureFleetSmokeTestDistroList where BuildID like '$BuildNumber' and RunStatus like 'START'"
 
@@ -64,43 +63,37 @@ $dbpassword = $XmlSecrets.secrets.DatabasePassword
 $database = $XmlSecrets.secrets.DatabaseName
 
 if ($server -and $dbuser -and $dbpassword -and $database) {
-    try {
-        Write-Host "Info: SQLQuery:  $sql"
-        $connectionString = "Server=$server;uid=$dbuser; pwd=$dbpassword;Database=$database;Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;MultipleActiveResultSets=True;"
-        $connection = New-Object System.Data.SqlClient.SqlConnection
-        $connection.ConnectionString = $connectionString
-        $connection.Open()
-        $retry = 0
-        While ($true) {
-            $dataset = new-object "System.Data.Dataset"
-            $dataadapter = new-object "System.Data.SqlClient.SqlDataAdapter" ($sql, $connection)
-            $recordcount = $dataadapter.Fill($dataset)
-            foreach ($row in $dataset.Tables.rows) {
-                $image = $row.ARMImage
-                Run-SmokeTestbyLISAv3 -ARMImage $image -TestLocation $TestLocation
-                $sql = "Update AzureFleetSmokeTestDistroList Set RunStatus='DONE' where ARMImage='$image'"
-                $command = $connection.CreateCommand()
-                $command.CommandText = $sql
-                $null = $command.executenonquery()
-                Write-Host "Update AzureFleetSmokeTestDistroList RunStatus to 'DONE' where ARMImage is $image"
-            }
-            if ($recordcount -eq 0) {
-                Start-Sleep -Seconds 5
-                $retry += 1
-            }
-            if ($retry -gt 3) {
-                break
-            }
+    Write-Host "Info: SQLQuery:  $sql"
+    $connectionString = "Server=$server;uid=$dbuser; pwd=$dbpassword;Database=$database;Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;MultipleActiveResultSets=True;"
+    $connection = New-Object System.Data.SqlClient.SqlConnection
+    $connection.ConnectionString = $connectionString
+    $connection.Open()
+    $retry = 0
+    While ($retry -lt 3) {
+        $dataset = new-object "System.Data.Dataset"
+        $dataadapter = new-object "System.Data.SqlClient.SqlDataAdapter" ($sql, $connection)
+        $recordcount = $dataadapter.Fill($dataset)
+        foreach ($row in $dataset.Tables.rows) {
+            $image = $row.ARMImage
+            Run-SmokeTestbyLISAv3 -ARMImage $image -TestLocation $TestLocation
+            $sql = "Update AzureFleetSmokeTestDistroList Set RunStatus='DONE' where ARMImage='$image'"
+            $command = $connection.CreateCommand()
+            $command.CommandText = $sql
+            $null = $command.ExecuteNonQuery()
+            $command.Dispose()
+            Write-Host "Update AzureFleetSmokeTestDistroList RunStatus to 'DONE' where ARMImage is $image"
         }
-    } catch {
-        Write-Host "Error: Failed to Query data from database"
-        $line = $_.InvocationInfo.ScriptLineNumber
-        $script_name = ($_.InvocationInfo.ScriptName).Replace($PWD,".")
-        $ErrorMessage =  $_.Exception.Message
-        Write-Host "Error: EXCEPTION : $ErrorMessage"
-        Write-Host "Error: Source : Line $line in script $script_name."
-    } finally {
+        if ($recordcount -eq 0) {
+            Start-Sleep -Seconds 5
+            $retry += 1
+        }
+    }
+    if ($command) {
+        $command.Dispose();
+    }
+    if ($connection) {
         $connection.Close()
+        $connection.Dispose()
     }
 } else {
     Write-Host "Error: Database details are not provided."
