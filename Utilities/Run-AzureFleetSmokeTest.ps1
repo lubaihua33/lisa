@@ -43,15 +43,29 @@ Write-Host "Info: Check the Azure Secrets File OK"
 Function Run-SmokeTestbyLISAv3($ARMImage, $TestLocation)
 {
     Write-Host "Info: Run smoke test for $ARMImage in $TestLocation"
-    Write-Host "Info: poetry run python lisa/main.py -r ..\runbook\smoke.yml -v gPublisher:${gPublisher} -v gOffer:${gOffer} -v gSku:${gSku} -v gVersion:${gVersion} -v location:${TestLocation} -v adminPrivateKeyFile:$($env:LISA_PRI_SECUREFILEPATH)"
-    Set-Location -Path ".\lisa"
 
     $gPublisher = $ARMImage.split(' ')[0]
     $gOffer = $ARMImage.split(' ')[1]
     $gSku = $ARMImage.split(' ')[2]
     $gVersion = $ARMImage.split(' ')[3]
-    poetry run python lisa/main.py -d -r ..\runbook\smoke.yml -v gPublisher:${gPublisher} -v gOffer:${gOffer} -v gSku:${gSku} -v gVersion:${gVersion} -v location:${TestLocation} -v adminPrivateKeyFile:"$($env:LISA_PRI_SECUREFILEPATH)"
-    Set-Location -Path "..\"
+
+    # Temp code check if have plan
+    Write-Host "Info: Get-AzVMImage and check if has plan"
+    if ($gVersion -ne "latest") {
+        $used_image = Get-AzVMImage -Location $TestLocation -PublisherName $gPublisher -Offer $gOffer -Skus $gSku -Version $gVersion
+    } else {
+        $used_image = Get-AzVMImage -Location $TestLocation -PublisherName $gPublisher -Offer $gOffer -Skus $gSku
+        $used_image = Get-AzVMImage -Location $TestLocation -PublisherName $gPublisher -Offer $gOffer -Skus $gSku -Version $used_image[-1].Version
+    }
+    if ($used_image.PurchasePlan) {
+        Write-Host "Info: The Image $ARMImage has plan. Skip testing the image."
+    } else {
+        Write-Host "Info: The Image $ARMImage has no plan. Continue testing the image. used_image: $used_image"
+        Set-Location -Path ".\lisa"
+        Write-Host "Info: poetry run python lisa/main.py -r ..\runbook\smoke.yml -v gPublisher:${gPublisher} -v gOffer:${gOffer} -v gSku:${gSku} -v gVersion:${gVersion} -v location:${TestLocation} -v adminPrivateKeyFile:$($env:LISA_PRI_SECUREFILEPATH)"
+        poetry run python lisa/main.py -d -r ..\runbook\smoke.yml -v gPublisher:${gPublisher} -v gOffer:${gOffer} -v gSku:${gSku} -v gVersion:${gVersion} -v location:${TestLocation} -v adminPrivateKeyFile:"$($env:LISA_PRI_SECUREFILEPATH)"
+        Set-Location -Path "..\"
+    }
 }
 
 $BuildNumber = $env:BUILD_BUILDNUMBER
