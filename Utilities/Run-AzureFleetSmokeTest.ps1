@@ -60,10 +60,10 @@ Function Run-SmokeTestbyLISAv3($ARMImage, $TestLocation)
     if ($used_image.PurchasePlan) {
         Write-Host "Info: The Image $ARMImage has plan. Skip testing the image."
     } else {
-        Write-Host "Info: The Image $ARMImage has no plan. Continue testing the image. used_image: $used_image"
+        Write-Host "Info: The Image $ARMImage has no plan. Continue testing the image."
         Set-Location -Path ".\lisa"
         Write-Host "Info: poetry run python lisa/main.py -r ..\runbook\smoke.yml -v gPublisher:${gPublisher} -v gOffer:${gOffer} -v gSku:${gSku} -v gVersion:${gVersion} -v location:${TestLocation} -v adminPrivateKeyFile:$($env:LISA_PRI_SECUREFILEPATH)"
-        poetry run python lisa/main.py -d -r ..\runbook\smoke.yml -v gPublisher:${gPublisher} -v gOffer:${gOffer} -v gSku:${gSku} -v gVersion:${gVersion} -v location:${TestLocation} -v adminPrivateKeyFile:"$($env:LISA_PRI_SECUREFILEPATH)"
+        poetry run python lisa/main.py -r ..\runbook\smoke.yml -v gPublisher:${gPublisher} -v gOffer:${gOffer} -v gSku:${gSku} -v gVersion:${gVersion} -v location:${TestLocation} -v adminPrivateKeyFile:"$($env:LISA_PRI_SECUREFILEPATH)"
         Set-Location -Path "..\"
     }
 }
