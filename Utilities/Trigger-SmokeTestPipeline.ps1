@@ -32,6 +32,8 @@ Param
     [String] $PipelineName,
     [String] $AzureSecretsFile,
     [String] $TestPass,
+    [String] $DbServer,
+    [String] $DbName,
     [int] $suggestedCount = 700
 )
 
@@ -357,25 +359,10 @@ if (![String]::IsNullOrEmpty($AzureSecretsFile) -and (Test-Path -Path $AzureSecr
     Write-Host "Error: Please provide value for -AzureSecretsFile"
     exit 1
 }
-
-# Read variable_database file and terminate if not present.
-$variableFile = ".\runbook\variable_database.yml"
-if (Test-Path -Path $variableFile) {
-    $content = Get-Content -Path $variableFile
-    foreach ($line in $content) {
-        if ($line.split(':')[0] -eq 'dbServerName') {
-            $server = $line.split(':')[1].trim()
-        }
-        if ($line.split(':')[0] -eq 'dbName') {
-            $database = $line.split(':')[1].trim()
-        }
-    }
-} else {
-    Write-Host "Error: No variable_database.yml"
-    exit 1
-}
 Write-Host "Info: Check the secrets file and variable_database.yml OK"
 
+$server = $DbServer
+$database = $DbName
 if (!$server -or !$dbuser -or !$dbpassword -or !$database) {
     Write-Host "Error: Database details are not provided."
     exit 1
