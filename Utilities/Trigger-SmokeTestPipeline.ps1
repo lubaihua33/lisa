@@ -189,14 +189,14 @@ function Add-DistroListCache($connection, $testPass) {
     $sql = "
     with groups as (
         select 
-            Location,
+            [AzureMarketplaceDistroInfo].Location,
             FullName,
             ROW_NUMBER() OVER (
                 PARTITION BY FullName
-                ORDER BY Location) as RowNumber
-        from [AzureMarketplaceDistroInfo]
-        where IsAvailable=1)
-
+                ORDER BY Priority) as RowNumber
+        from [AzureMarketplaceDistroInfo], [AzureLocationInfo]
+        where IsAvailable=1 and [AzureMarketplaceDistroInfo].location = [AzureLocationInfo].location
+        )
     insert into TestPassCache(Location, ARMImage, Status, TestPass)
     select Location, FullName, '$StatusNotStarted', @TestPass
     from groups
