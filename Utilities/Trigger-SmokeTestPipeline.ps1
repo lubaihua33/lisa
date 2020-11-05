@@ -44,6 +44,66 @@ $StatusDone = "Done"
 $RunningBuildList = New-Object System.Collections.ArrayList
 $AllBuildList = New-Object System.Collections.ArrayList
 
+$LogDir = "trigger-pipeline"
+$LogFileName = "Smoke-Test-$(Get-Date -Format 'yyyy-MM-dd-HH-mm-ss-ffff').log"
+
+Function Write-Log() {
+	param
+	(
+		[ValidateSet('INFO','WARN','ERROR','DEBUG', IgnoreCase = $false)]
+		[string]$logLevel,
+		[string]$text
+	)
+
+	if ($password) {
+		$text = $text.Replace($password,"******")
+	}
+	$now = [Datetime]::Now.ToUniversalTime().ToString("MM/dd/yyyy HH:mm:ss")
+	$logType = $logLevel.PadRight(5, ' ')
+	$finalMessage = "$now : [$logType] $text"
+	$fgColor = "White"
+	switch ($logLevel) {
+		"INFO"	{$fgColor = "White"; continue}
+		"WARN"	{$fgColor = "Yellow"; continue}
+		"ERROR"	{$fgColor = "Red"; continue}
+		"DEBUG"	{$fgColor = "DarkGray"; continue}
+	}
+	Write-Host $finalMessage -ForegroundColor $fgColor
+
+	try {
+		if ($LogDir) {
+			if (!(Test-Path $LogDir)) {
+				New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+			}
+		}
+		if (!$LogFileName) {
+			$LogFileName = "Smoke-Test-$(Get-Date -Format 'yyyy-MM-dd-HH-mm-ss-ffff').log"
+		}
+		$LogFileFullPath = Join-Path $LogDir $LogFileName
+		if (!(Test-Path $LogFileFullPath)) {
+			New-Item -path $LogDir -name $LogFileName -type "file" | Out-Null
+		}
+		Add-Content -Value $finalMessage -Path $LogFileFullPath -Force
+	} catch {
+		Write-Output "[LOG FILE EXCEPTION] : $now : $text"
+	}
+}
+
+Function Write-LogInfo($text) {
+	Write-Log "INFO" $text
+}
+
+Function Write-LogErr($text) {
+	Write-Log "ERROR" $text
+}
+
+Function Write-LogWarn($text) {
+	Write-Log "WARN" $text
+}
+
+Function Write-LogDbg($text) {
+	Write-Log "DEBUG" $text
+}
 function Add-RunningBuildList($buildID, $location) {
     $info = @{BuildID = $buildID; Location = $location}
     $RunningBuildList.Add($info) | Out-Null
@@ -70,8 +130,11 @@ Function Invoke-Pipeline(
         $runBuild = "runs/$(${BuildID})?api-version=6.0-preview.1"
         $Method = "Get"
         $BuildBody = $null
+    } elseif ($OperateMethod -eq "List") {
+        $runBuild = "runs?api-version=6.0-preview.1"
+        $Method = "Get"
     } else {
-        Write-Host "Error: The OperateMethod $OperateMethod is not supported"
+        Write-LogErr "The OperateMethod $OperateMethod is not supported"
         return $null
     }
 
@@ -96,11 +159,11 @@ Function Invoke-Pipeline(
             $line = $_.InvocationInfo.ScriptLineNumber
             $script_name = ($_.InvocationInfo.ScriptName).Replace($PWD,".")
             $ErrorMessage =  $_.Exception.Message
-            Write-Error "EXCEPTION : $ErrorMessage"
-            Write-Error "Source : Line $line in script $script_name."
+            Write-LogErr "EXCEPTION : $ErrorMessage"
+            Write-LogErr "Source : Line $line in script $script_name."
         }
     } else {
-        Write-Error "Problem occured while getting the build"
+        Write-LogErr "Problem occured while getting the build"
     }
 }
 
@@ -117,7 +180,7 @@ Function Run-Pipeline ($Location, $ImagesCount) {
                                    -PipelineName $PipelineName -DevOpsPAT $DevOpsPAT -BuildBody $BuildBody `
                                    -OperateMethod "Run"
         if ($result -and $result.id) {
-            Write-Host "Info: The pipeline #BuildId $($result.id) will run $ImagesCount images in $Location"
+            Write-LogInfo "The pipeline #BuildId $($result.id) will run $ImagesCount images in $Location"
             return $result.id
         }
         retry += 1
@@ -138,13 +201,13 @@ Function Get-CountInOnePipeline([int]$totalCount, [int]$suggestedCount) {
         $countList.Add([math]::floor($totalCount / $pipelineCount) + $totalCount % $pipelineCount) | Out-Null
     }
 
-    Write-Host "Info: countList is $countList"
+    Write-LogInfo "countList is $countList"
     return $countList
 }
 
 function ExecuteSql($connection, $sql, $parameters) {
     try {
-        Write-Host "Info: Run sql command: $sql"
+        Write-LogDbg "Run sql command: $sql"
         $command = $connection.CreateCommand()
         $command.CommandText = $sql
         if ($parameters) {
@@ -153,7 +216,7 @@ function ExecuteSql($connection, $sql, $parameters) {
 
         $count = $command.ExecuteNonQuery()
         if ($count) {
-            Write-Host "Info: $count records are executed successfully"
+            Write-LogInfo "$count records are executed successfully"
         }
     }
     finally {
@@ -163,7 +226,7 @@ function ExecuteSql($connection, $sql, $parameters) {
 
 function QuerySql($connection, $sql, $testPass) {
     try {
-        Write-Host "Info: Run sql command: $sql"
+        Write-LogDbg "Run sql command: $sql"
         $dataset = new-object "System.Data.Dataset"
         $command = $connection.CreateCommand()
         $command.CommandText = $sql
@@ -187,7 +250,7 @@ function QuerySql($connection, $sql, $testPass) {
     return $rows
 }
 
-function Add-DistroListCache($connection, $testPass) {
+function Add-TestPassCache($connection, $testPass) {
     $sql = "
     with groups as (
         select 
@@ -208,44 +271,80 @@ function Add-DistroListCache($connection, $testPass) {
     ExecuteSql $connection $sql $parameters
 }
 
-function Initialize-DistroList($connection, $TestPass)
+function Initialize-TestPassCache($connection, $TestPass)
 {
     $sql = "select count(*) from TestPassCache where TestPass=@Testpass"
     $results = QuerySql $connection $sql $TestPass
     $dataNumber = ($results[0][0]) -as [int]
 
     if ($dataNumber -eq 0) {
-        Write-Host "Info: Initialize test pass"
-        Add-DistroListCache $connection $testPass
+        Write-LogInfo "Initialize test pass cahce"
+        Add-TestPassCache $connection $testPass
     }
     else {
         # reset running status
-        $sql = "
-        UPDATE TestPassCache
-        SET Status='$StatusNotStarted', UpdatedDate=getdate(), Context=NULL
-        WHERE TestPass=@TestPass and Status='$StatusRunning'"
+        if ($RunningBuildList.Count -gt 0) {
+            $List = $RunningBuildList | ForEach-Object {$_.BuildID}
+            $buildIdList = [string]::Join(",", $List)
+            $sql = "
+            UPDATE TestPassCache
+            SET Status='$StatusNotStarted', UpdatedDate=getdate(), Context=NULL
+            WHERE TestPass=@TestPass and Status='$StatusRunning' and
+            Context not in ($buildIdList)"
+        } else {
+            $sql = "
+            UPDATE TestPassCache
+            SET Status='$StatusNotStarted', UpdatedDate=getdate(), Context=NULL
+            WHERE TestPass=@TestPass and Status='$StatusRunning'"
+        }
         $parameters = @{"@TestPass" = $testPass }
         ExecuteSql $connection $sql $parameters
-        Write-Host "Reuse existing test pass"
+        Write-LogInfo "Reuse existing test pass cache"
     }
 }
 
+function Sync-RunningBuild ($connection, $TestPass) {
+    Write-LogInfo "Sync up with running builds"
+    $result = Invoke-Pipeline -OrganizationUrl $OrganizationUrl -AzureDevOpsProjectName $AzureDevOpsProjectName `
+                              -PipelineName $PipelineName -DevOpsPAT $DevOpsPAT -OperateMethod "List"
+
+    if ($result -and $result.value) {
+        $List = $result.value | ForEach-Object -Process {if ($_.state -eq 'inProgress' -or $_.state -eq 'postponed') {$_.id}}
+        $buildIdList = [string]::Join(",", $List)
+        Write-LogDbg "The builds $buildIdList state is inProgress or postponed"
+
+        $sql = "
+        select distinct Context, Location
+        from TestPassCache 
+        where TestPass=@TestPass and Status='$StatusRunning' and 
+        Context in ($buildIdList)"
+
+        $results = QuerySql $connection $sql $TestPass
+        foreach ($_ in $results) {
+            $buildId = $_.Context
+            $location = $_.Location
+
+            Write-LogInfo "The builds $buildId is still running. Add it into running build list"
+            Add-RunningBuildList $buildId $location
+            Add-AllBuildList $buildId $location
+        }
+    }
+}
 
 function Start-TriggerPipeline($location) {
     $sql = "
     select count(ARMImage) from TestPassCache
     where Location='$location' and TestPass=@TestPass and 
-    Context is NULL and Status='$StatusNotStarted'
-    "
-    Write-Host "Info: Run sql command: $sql"
+    Context is NULL and Status='$StatusNotStarted'"
+
     $results = QuerySql $connection $sql $TestPass
 
     $totalCount = ($results[0][0]) -as [int]
     if ($totalCount -eq 0) {
-        Write-Host "Info: No image need to test in the location: $location"
+        Write-LogInfo "No image in the location $location need to trigger testing pipeline"
         return
     } else {
-        Write-Host "Info: $totalCount images in the location: $location"
+        Write-LogInfo "$totalCount images in the location $location need to trigger testing pipeline"
     }
 
     $countList = Get-CountInOnePipeline $totalCount $suggestedCount
@@ -253,7 +352,7 @@ function Start-TriggerPipeline($location) {
     for ($i = 0; $i -lt $countList.Count; $i++) {
         $buildId = Run-Pipeline $location $countList[$i]
         if (!$buildId) {
-            Write-Host "Error: Failed to Trigger ADO pipeline."
+            Write-LogErr "Failed to Trigger ADO pipeline"
             continue
         }
 
@@ -261,8 +360,8 @@ function Start-TriggerPipeline($location) {
         update top ($($countList[$i])) TestPassCache
         set Context=$buildId, Status='$StatusRunning', UpdatedDate=getdate()
         where Location='$location' and TestPass=@TestPass and 
-        Context is NULL and Status='$StatusNotStarted'
-        "
+        Context is NULL and Status='$StatusNotStarted'"
+
         $parameters = @{"@TestPass" = $testPass }
         ExecuteSql $connection $sql $parameters
 
@@ -272,6 +371,7 @@ function Start-TriggerPipeline($location) {
 }
 
 function Update-TestPassCacheDone($connection, $testPass) {
+    Write-LogInfo "Update test pass cache done"
     $sql = "
     With Runnings as (
         select *
@@ -306,13 +406,11 @@ function Update-TestPassCacheDone($connection, $testPass) {
 function Get-MissingCount($connection, $TestPass, $BuildId) {
     $sql = "
     select Count(ARMImage) from TestPassCache
-    where Context=$BuildId and Status='$StatusRunning'
-    "
-    Write-Host "Info: Get missing image count of pipeline #$BuildId..."
-    Write-Host "Info: Run sql command: $sql"
+    where Context=$BuildId and Status='$StatusRunning'"
+
     $results = QuerySql $connection $sql $TestPass
     $count = ($results[0][0]) -as [int]
-    Write-Host "Info: The missing image count is $count"
+    Write-LogInfo "The missing image count is $count"
 
     return $count
 }
@@ -320,12 +418,11 @@ function Get-MissingCount($connection, $TestPass, $BuildId) {
 function Get-DoneCount($connection, $TestPass) {
     $sql = "
     select Count(ARMImage) from TestPassCache
-    where TestPass=@TestPass and Status='$StatusDone'
-    "
-    Write-Host "Info: Run sql command: $sql"
+    where TestPass=@TestPass and Status='$StatusDone'"
+
     $results = QuerySql $connection $sql $TestPass
     $count = ($results[0][0]) -as [int]
-    Write-Host "Info: The completed count is $count"
+    Write-LogInfo "The completed count is $count"
 
     return $count
 }
@@ -333,18 +430,17 @@ function Get-DoneCount($connection, $TestPass) {
 function Get-RunningCount($connection, $TestPass) {
     $sql = "
     select Count(ARMImage) from TestPassCache
-    where TestPass=@TestPass and Status='$StatusRunning'
-    "
-    Write-Host "Info: Run sql command: $sql"
+    where TestPass=@TestPass and Status='$StatusRunning'"
+
     $results = QuerySql $connection $sql $TestPass
     $count = ($results[0][0]) -as [int]
-    Write-Host "Info: The running count is $count"
+    Write-LogInfo "The running count is $count"
 
     return $count
 }
 
 # Read secrets file and terminate if not present.
-Write-Host "Info: Check the Azure Secrets File..."
+Write-LogInfo "Check the Azure Secrets File..."
 if (![String]::IsNullOrEmpty($AzureSecretsFile) -and (Test-Path -Path $AzureSecretsFile)) {
     $content = Get-Content -Path $AzureSecretsFile
     foreach ($line in $content) {
@@ -356,15 +452,15 @@ if (![String]::IsNullOrEmpty($AzureSecretsFile) -and (Test-Path -Path $AzureSecr
         }
     }
 } else {
-    Write-Host "Error: Please provide value for -AzureSecretsFile"
+    Write-LogErr "Please provide value for -AzureSecretsFile"
     exit 1
 }
-Write-Host "Info: Check the secrets file and variable_database.yml OK"
+Write-LogInfo "Check the secrets file and variable_database.yml OK"
 
 $server = $DbServer
 $database = $DbName
 if (!$server -or !$dbuser -or !$dbpassword -or !$database) {
-    Write-Host "Error: Database details are not provided."
+    Write-LogErr "Database details are not provided."
     exit 1
 }
 
@@ -372,12 +468,13 @@ $connectionString = "Server=$server;uid=$dbuser;pwd=$dbpassword;Database=$databa
                     "Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;MultipleActiveResultSets=True;"
 
 try {
-    Write-Host "Info: SQLQuery: $sql"
     $connection = New-Object System.Data.SqlClient.SqlConnection
     $connection.ConnectionString = $connectionString
     $connection.Open()
 
-    Initialize-DistroList $connection $TestPass
+    # Sync all the running job of the same test pass
+    Sync-RunningBuild $connection $TestPass
+    Initialize-TestPassCache $connection $TestPass
     Update-TestPassCacheDone $connection $TestPass
 
     # Start pipeline
@@ -398,52 +495,56 @@ try {
                                        -PipelineName $PipelineName -DevOpsPAT $DevOpsPAT -BuildID $buildId `
                                        -OperateMethod "Get"
             if ($result -and $result.state -ne "inProgress" -and $result.state -ne "postponed") {
-                $totalCompleted++
+                Write-LogInfo "The pipeline #BuildId $buildId has stopped"
+                $totalCompleted++                
                 Update-TestPassCacheDone $connection $TestPass
 
+                Write-LogInfo "Get missing images count in the build $buildId"
                 $missingCount = Get-MissingCount $connection $TestPass $buildId
                 if ($missingCount -gt 0) {
+                    Write-LogInfo "Need to trigger testing pipeline"
                     $location = $RunningBuildList[$i].Location
                     $newBuildId = Run-Pipeline $location $missingCount
                     if ($newBuildId) {
                         $sql = "
                         update TestPassCache
                         set Context = $newBuildId
-                        where Context = $buildId and Status='$StatusRunning'
-                        "
+                        where Context = $buildId and Status='$StatusRunning'"
+
                         ExecuteSql $connection $sql
 
                         $RunningBuildList[$i].BuildID = $newBuildId
                         Add-AllBuildList $newBuildId $location
                     } else {
-                        Write-Host "Error: Run pipeline failed"
+                        Write-LogErr "Run pipeline failed"
                     }
                 } else {
-                    Write-Host "Info: The pipeline #BuildId $($RunningBuildList[$i].BuildID) has completed all the tasks"
+                    Write-LogInfo "The pipeline #BuildId $($RunningBuildList[$i].BuildID) has completed all the tasks"
+                    Write-LogInfo "Remove it from the running buildid list"
                     $RunningBuildList.RemoveAt($i)
+                    $i--
                 }
             }
         }
-        Write-Host "$($totalCompleted) completed jobs, $($RunningBuildList.Count) running jobs"
+        Write-LogInfo "Total $($totalCompleted) completed jobs, $($RunningBuildList.Count) running jobs"
         $doneCount = Get-DoneCount $connection $TestPass
         $runningCount = Get-RunningCount $connection $TestPass
-        Write-Host "$($doneCount) completed images, $($runningCount) running images"
+        Write-LogInfo "Total $($doneCount) completed images, $($runningCount) running images"
 
         if ($RunningBuildList.Count -gt 0) {
-            start-sleep -Seconds 300
+            start-sleep -Seconds 120
             Update-TestPassCacheDone $connection $TestPass
         }
     }
-    Write-Host "All builds have completed."
+    Write-LogInfo "All builds have completed."
     $AllBuildList
 } 
 catch {
-    Write-Host "Error: Failed to Query data from database"
     $line = $_.InvocationInfo.ScriptLineNumber
     $script_name = ($_.InvocationInfo.ScriptName).Replace($PWD,".")
     $ErrorMessage =  $_.Exception.Message
-    Write-Host "Error: EXCEPTION : $ErrorMessage"
-    Write-Host "Error: Source : Line $line in script $script_name."
+    Write-LogErr "EXCEPTION : $ErrorMessage"
+    Write-LogErr "Source : Line $line in script $script_name."
 } 
 finally {
     if ($null -ne $connection) {
