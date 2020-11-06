@@ -173,6 +173,7 @@ Function Run-Pipeline ($Location, $ImagesCount) {
         variables = New-Object PSObject -Property @{
             Location   = New-Object PSObject -Property @{value = $Location}
             ImagesCount = New-Object PSObject -Property @{value = $ImagesCount}
+            TestPass = New-Object PSObject -Property @{value = $TestPass}
         }
     }
     While ($retry -lt 3) {

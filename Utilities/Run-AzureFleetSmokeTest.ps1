@@ -31,19 +31,12 @@ Function Invoke-SmokeTest($ARMImage, $Location)
 {
     Write-Host "Info: Run smoke test for $ARMImage in $Location"
 
-    $gPublisher = $ARMImage.split(' ')[0]
-    $gOffer = $ARMImage.split(' ')[1]
-    $gSku = $ARMImage.split(' ')[2]
-    $gVersion = $ARMImage.split(' ')[3]
-
     $logInfo = "Info: .\lisa -r runbook\smoke.yml " +
-    "-v gPublisher:${gPublisher} -v gOffer:${gOffer} -v gSku:${gSku} -v gVersion:${gVersion} " + 
-    "-v location:${Location} -v adminPrivateKeyFile:$env:LISA_PRI_SECUREFILEPATH"
+    "-v gGallery:$ARMImage -v location:$Location -v testPass:$TestPass -v adminPrivateKeyFile:$env:LISA_PRI_SECUREFILEPATH"
     Write-Host $logInfo
 
     .\lisa -r runbook\smoke.yml `
-    -v gPublisher:${gPublisher} -v gOffer:${gOffer} -v gSku:${gSku} -v gVersion:${gVersion} `
-    -v location:${Location} -v adminPrivateKeyFile:$env:LISA_PRI_SECUREFILEPATH
+    -v gGallery:$ARMImage -v location:$Location -v testPass:$TestPass -v adminPrivateKeyFile:$env:LISA_PRI_SECUREFILEPATH
 }
 
 # Read secrets file and terminate if not present.
