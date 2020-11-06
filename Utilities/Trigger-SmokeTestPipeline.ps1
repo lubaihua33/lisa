@@ -29,7 +29,8 @@ Param
     [String] $OrganizationUrl,
     [String] $AzureDevOpsProjectName,
     [String] $DevOpsPAT,
-    [String] $PipelineName,
+    [String] $ParentPipelineName,
+    [String] $ChildPipelineName,
     [String] $AzureSecretsFile,
     [String] $TestPass,
     [String] $DbServer,
@@ -180,7 +181,7 @@ Function Run-Pipeline ($Location, $ImagesCount) {
     }
     While ($retry -lt 3) {
         $result = Invoke-Pipeline -OrganizationUrl $OrganizationUrl -AzureDevOpsProjectName $AzureDevOpsProjectName `
-                                   -PipelineName $PipelineName -DevOpsPAT $DevOpsPAT -BuildBody $BuildBody `
+                                   -PipelineName $ChildPipelineName -DevOpsPAT $DevOpsPAT -BuildBody $BuildBody `
                                    -OperateMethod "Run"
         if ($result -and $result.id) {
             Write-LogInfo "The pipeline #BuildId $($result.id) will run $ImagesCount images in $Location"
@@ -309,7 +310,7 @@ function Initialize-TestPassCache($connection, $TestPass)
 function Sync-RunningBuild ($connection, $TestPass) {
     Write-LogInfo "Sync up with running builds"
     $result = Invoke-Pipeline -OrganizationUrl $OrganizationUrl -AzureDevOpsProjectName $AzureDevOpsProjectName `
-                              -PipelineName $PipelineName -DevOpsPAT $DevOpsPAT -OperateMethod "List"
+                              -PipelineName $ChildPipelineName -DevOpsPAT $DevOpsPAT -OperateMethod "List"
 
     if ($result -and $result.value) {
         $List = $result.value | ForEach-Object -Process {if ($_.state -eq 'inProgress' -or $_.state -eq 'postponed') {$_.id}}
@@ -444,6 +445,26 @@ function Get-RunningCount($connection, $TestPass) {
     return $count
 }
 
+###################################################################################################
+# The main process
+###################################################################################################
+
+# Check if have the same TestPass pipeline
+do {
+    $isAlreadyExist = $false
+    $result = Invoke-Pipeline -OrganizationUrl $OrganizationUrl -AzureDevOpsProjectName $AzureDevOpsProjectName `
+                            -PipelineName $ParentPipelineName -DevOpsPAT $DevOpsPAT -OperateMethod "List"
+
+    $List = $result.value | ForEach-Object -Process {if ($_.state -eq 'inProgress' -or $_.state -eq 'postponed') {$_}}
+    foreach ($_ in $List) {
+        if ($_.name -imatch "$TestPass") {
+            $isAlreadyExist = $true
+            start-sleep -Seconds 30
+            continue
+        }
+    }
+} while ($isAlreadyExist -eq $true)
+
 # Read secrets file and terminate if not present.
 Write-LogInfo "Check the Azure Secrets File..."
 if (![String]::IsNullOrEmpty($AzureSecretsFile) -and (Test-Path -Path $AzureSecretsFile)) {
@@ -497,7 +518,7 @@ try {
         for ($i = 0; $i -lt $RunningBuildList.Count; $i++) {
             $buildId = $RunningBuildList[$i].BuildID
             $result = Invoke-Pipeline -OrganizationUrl $OrganizationUrl -AzureDevOpsProjectName $AzureDevOpsProjectName `
-                                       -PipelineName $PipelineName -DevOpsPAT $DevOpsPAT -BuildID $buildId `
+                                       -PipelineName $ChildPipelineName -DevOpsPAT $DevOpsPAT -BuildID $buildId `
                                        -OperateMethod "Get"
             if ($result -and $result.state -ne "inProgress" -and $result.state -ne "postponed") {
                 Write-LogInfo "The pipeline #BuildId $buildId has stopped"
