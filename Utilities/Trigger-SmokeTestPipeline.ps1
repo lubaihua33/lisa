@@ -40,6 +40,8 @@ Param
 $StatusNotStarted = "NotStarted"
 $StatusRunning = "Running"
 $StatusDone = "Done"
+$NotRun = "NOTRUN"
+$Running = "RUNNING"
 
 $RunningBuildList = New-Object System.Collections.ArrayList
 $AllBuildList = New-Object System.Collections.ArrayList
@@ -388,7 +390,9 @@ function Update-TestPassCacheDone($connection, $testPass) {
             from TestPass,TestRun,TestResult
             where TestPass.Name=@TestPass and
             TestPass.Id = TestRun.TestPassId and
-            TestRun.Id = TestResult.RunId group by TestResult.Image
+            TestRun.Id = TestResult.RunId and
+            TestResult.Status <> '$NotRun' and
+            TestResult.Status <> '$Running' group by TestResult.Image
         )
     )
     update TestPassCache
