@@ -459,6 +459,7 @@ do {
     foreach ($_ in $List) {
         if ($_.name -imatch "$TestPass") {
             $isAlreadyExist = $true
+            Write-LogInfo "There is already one pipeline to run $TestPass testing. Wait 30s.."
             start-sleep -Seconds 30
             continue
         }
