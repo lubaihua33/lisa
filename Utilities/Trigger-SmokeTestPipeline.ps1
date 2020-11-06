@@ -11,7 +11,7 @@
     -AzureDevOpsProjectName, The project where the pipeline resides
     -DevOpsPAT, The personal access token
     -PipelineName, The pipeline name
-    -suggestedCount, The Suggested number of images are tested in one pipeline
+    -SuggestedCount, The Suggested number of images are tested in one pipeline
     -TestPass, The TestPass name
 Documentation
 
@@ -35,7 +35,7 @@ Param
     [String] $TestPass,
     [String] $DbServer,
     [String] $DbName,
-    [int] $suggestedCount = 700
+    [int] $SuggestedCount = 700
 )
 
 $StatusNotStarted = "NotStarted"
@@ -192,11 +192,11 @@ Function Run-Pipeline ($Location, $ImagesCount) {
     return $null
 }
 
-# $totalCount = 1600, $suggestedCount = 700
+# $totalCount = 1600, $SuggestedCount = 700
 # $countList = (533,533,534)
-Function Get-CountInOnePipeline([int]$totalCount, [int]$suggestedCount) {
+Function Get-CountInOnePipeline([int]$totalCount, [int]$SuggestedCount) {
     $countList = New-Object System.Collections.ArrayList
-    $pipelineCount = [math]::ceiling($totalCount / $suggestedCount / 1.1)
+    $pipelineCount = [math]::ceiling($totalCount / $SuggestedCount / 1.1)
 
     for ($i = 0; $i -lt ($pipelineCount - 1); $i++) {
         $countList.Add([math]::floor($totalCount / $pipelineCount)) | Out-Null
@@ -314,23 +314,25 @@ function Sync-RunningBuild ($connection, $TestPass) {
 
     if ($result -and $result.value) {
         $List = $result.value | ForEach-Object -Process {if ($_.state -eq 'inProgress' -or $_.state -eq 'postponed') {$_.id}}
-        $buildIdList = [string]::Join(",", $List)
-        Write-LogDbg "The builds $buildIdList state is inProgress or postponed"
+        if ($List) {
+            $buildIdList = [string]::Join(",", $List)
+            Write-LogDbg "The builds $buildIdList state is inProgress or postponed"
 
-        $sql = "
-        select distinct Context, Location
-        from TestPassCache 
-        where TestPass=@TestPass and Status='$StatusRunning' and 
-        Context in ($buildIdList)"
+            $sql = "
+            select distinct Context, Location
+            from TestPassCache 
+            where TestPass=@TestPass and Status='$StatusRunning' and 
+            Context in ($buildIdList)"
 
-        $results = QuerySql $connection $sql $TestPass
-        foreach ($_ in $results) {
-            $buildId = $_.Context
-            $location = $_.Location
+            $results = QuerySql $connection $sql $TestPass
+            foreach ($_ in $results) {
+                $buildId = $_.Context
+                $location = $_.Location
 
-            Write-LogInfo "The builds $buildId is still running. Add it into running build list"
-            Add-RunningBuildList $buildId $location
-            Add-AllBuildList $buildId $location
+                Write-LogInfo "The builds $buildId is still running. Add it into running build list"
+                Add-RunningBuildList $buildId $location
+                Add-AllBuildList $buildId $location
+            }
         }
     }
 }
@@ -351,7 +353,7 @@ function Start-TriggerPipeline($location) {
         Write-LogInfo "$totalCount images in the location $location need to trigger testing pipeline"
     }
 
-    $countList = Get-CountInOnePipeline $totalCount $suggestedCount
+    $countList = Get-CountInOnePipeline $totalCount $SuggestedCount
 
     for ($i = 0; $i -lt $countList.Count; $i++) {
         $buildId = Run-Pipeline $location $countList[$i]
@@ -456,12 +458,14 @@ do {
                             -PipelineName $ParentPipelineName -DevOpsPAT $DevOpsPAT -OperateMethod "List"
 
     $List = $result.value | ForEach-Object -Process {if ($_.state -eq 'inProgress' -or $_.state -eq 'postponed') {$_}}
-    foreach ($_ in $List) {
-        if ($_.name -imatch "$TestPass") {
-            $isAlreadyExist = $true
-            Write-LogInfo "There is already one pipeline to run $TestPass testing. Wait 30s.."
-            start-sleep -Seconds 30
-            continue
+    if ($List.count) {
+        foreach ($_ in $List) {
+            if ($_.name -imatch "$TestPass") {
+                $isAlreadyExist = $true
+                Write-LogInfo "There is already one pipeline to run $TestPass testing. Wait 30s.."
+                start-sleep -Seconds 30
+                continue
+            }
         }
     }
 } while ($isAlreadyExist -eq $true)
