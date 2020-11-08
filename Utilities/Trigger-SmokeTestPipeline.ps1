@@ -35,6 +35,7 @@ Param
     [String] $TestPass,
     [String] $DbServer,
     [String] $DbName,
+    [int] $Cocurrent,
     [int] $SuggestedCount = 700
 )
 
@@ -196,7 +197,11 @@ Function Run-Pipeline ($Location, $ImagesCount) {
 # $countList = (533,533,534)
 Function Get-CountInOnePipeline([int]$totalCount, [int]$SuggestedCount) {
     $countList = New-Object System.Collections.ArrayList
-    $pipelineCount = [math]::ceiling($totalCount / $SuggestedCount / 1.1)
+    if ($Cocurrent) {
+        $pipelineCount = $Cocurrent
+    } else {
+        $pipelineCount = [math]::ceiling($totalCount / $SuggestedCount / 1.1)
+    }
 
     for ($i = 0; $i -lt ($pipelineCount - 1); $i++) {
         $countList.Add([math]::floor($totalCount / $pipelineCount)) | Out-Null
