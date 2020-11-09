@@ -196,12 +196,12 @@ Function Run-Pipeline ($Location, $ImagesCount) {
 
 # $totalCount = 1600, $SuggestedCount = 700
 # $countList = (533,533,534)
-Function Get-CountInOnePipeline([int]$totalCount, [int]$SuggestedCount) {
+Function Get-CountInOnePipeline([int]$totalCount, [int]$suggestedCount, [int]$cocurrent) {
     $countList = New-Object System.Collections.ArrayList
-    if ($Cocurrent) {
+    if ($cocurrent) {
         $pipelineCount = $Cocurrent
     } else {
-        $pipelineCount = [math]::ceiling($totalCount / $SuggestedCount / 1.1)
+        $pipelineCount = [math]::ceiling($totalCount / $suggestedCount / 1.1)
     }
 
     for ($i = 0; $i -lt ($pipelineCount - 1); $i++) {
@@ -365,7 +365,7 @@ function Start-TriggerPipeline($location) {
         Write-LogInfo "$totalCount images in the location $location need to trigger testing pipeline"
     }
 
-    $countList = Get-CountInOnePipeline $totalCount $SuggestedCount
+    $countList = Get-CountInOnePipeline $totalCount $SuggestedCount $Cocurrent
 
     for ($i = 0; $i -lt $countList.Count; $i++) {
         $buildId = Run-Pipeline $location $countList[$i]
