@@ -204,10 +204,16 @@ Function Get-CountInOnePipeline([int]$totalCount, [int]$SuggestedCount) {
     }
 
     for ($i = 0; $i -lt ($pipelineCount - 1); $i++) {
-        $countList.Add([math]::floor($totalCount / $pipelineCount)) | Out-Null
+        $count = [math]::floor($totalCount / $pipelineCount)
+        if ($count -ne 0) {
+            $countList.Add($count) | Out-Null
+        }
     }
     if ($i -eq ($pipelineCount - 1)) {
-        $countList.Add([math]::floor($totalCount / $pipelineCount) + $totalCount % $pipelineCount) | Out-Null
+        $count = [math]::floor($totalCount / $pipelineCount) + $totalCount % $pipelineCount
+        if ($count -ne 0) {
+            $countList.Add($count) | Out-Null
+        }
     }
 
     Write-LogInfo "countList is $countList"
