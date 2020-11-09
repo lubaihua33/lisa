@@ -36,6 +36,7 @@ Param
     [String] $DbServer,
     [String] $DbName,
     [int] $Cocurrent,
+    [int] $FailureId,
     [int] $SuggestedCount = 700
 )
 
@@ -422,6 +423,38 @@ function Update-TestPassCacheDone($connection, $testPass) {
     ExecuteSql $connection $sql $parameters
 }
 
+function Update-TestPassCacheByFailureId ($connection, $TestPass, $FailureId) {
+    Write-LogInfo "Update test pass cache NotStarted according to FailureId $FailureId"
+    $sql = "
+    With TestPassCaches as (
+        select *
+        from TestPassCache
+        where TestPass=@TestPass
+    ),
+    TestResults as (
+        select *
+        from TestResult 
+        where Id in (
+            select max(TestResult.Id)
+            from TestPass,TestRun,TestResult
+            where TestPass.Name=@TestPass and
+            TestPass.Id = TestRun.TestPassId and
+            TestRun.Id = TestResult.RunId and
+            TestResult.FailureId=$FailureId group by TestResult.Image
+        )
+    )
+    update TestPassCache
+    set Status='$StatusNotStarted', UpdatedDate=getdate(), Context=NULL
+    where TestPass=@TestPass and ID in (
+        select TestPassCaches.ID from TestPassCaches left join TestResults on 
+        TestPassCaches.Location = TestResults.Location and
+        TestPassCaches.ArmImage = TestResults.Image
+        where TestPassCaches.TestPass = @TestPass and TestResults.Id is not null
+    )"
+    $parameters = @{"@TestPass" = $testPass }
+    ExecuteSql $connection $sql $parameters
+}
+
 function Get-MissingCount($connection, $TestPass, $BuildId) {
     $sql = "
     select Count(ARMImage) from TestPassCache
@@ -518,6 +551,9 @@ try {
     Sync-RunningBuild $connection $TestPass
     Initialize-TestPassCache $connection $TestPass
     Update-TestPassCacheDone $connection $TestPass
+    if ($FailureId) {
+        Update-TestPassCacheByFailureId $connection $TestPass $FailureId
+    }
 
     # Start pipeline
     $sql = "select distinct Location from TestPassCache where TestPass=@Testpass"
