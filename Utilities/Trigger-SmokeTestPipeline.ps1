@@ -45,6 +45,7 @@ $StatusRunning = "Running"
 $StatusDone = "Done"
 $NotRun = "NOTRUN"
 $Running = "RUNNING"
+$ExitCode = 0
 
 $RunningBuildList = New-Object System.Collections.ArrayList
 $AllBuildList = New-Object System.Collections.ArrayList
@@ -623,10 +624,14 @@ catch {
     $ErrorMessage =  $_.Exception.Message
     Write-LogErr "EXCEPTION : $ErrorMessage"
     Write-LogErr "Source : Line $line in script $script_name."
+    $ExitCode = 1
+    exit $ExitCode
 } 
 finally {
     if ($null -ne $connection) {
         $connection.Close()
         $connection.Dispose()
     }
+
+    exit $ExitCode
 }
