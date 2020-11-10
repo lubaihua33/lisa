@@ -303,13 +303,13 @@ function Initialize-TestPassCache($connection, $TestPass)
             $buildIdList = [string]::Join(",", $List)
             $sql = "
             UPDATE TestPassCache
-            SET Status='$StatusNotStarted', UpdatedDate=getdate(), Context=NULL
+            SET Status='$StatusNotStarted', UpdatedDate=getdate()
             WHERE TestPass=@TestPass and Status='$StatusRunning' and
             Context not in ($buildIdList)"
         } else {
             $sql = "
             UPDATE TestPassCache
-            SET Status='$StatusNotStarted', UpdatedDate=getdate(), Context=NULL
+            SET Status='$StatusNotStarted', UpdatedDate=getdate()
             WHERE TestPass=@TestPass and Status='$StatusRunning'"
         }
         $parameters = @{"@TestPass" = $testPass }
@@ -352,7 +352,7 @@ function Start-TriggerPipeline($location) {
     $sql = "
     select count(ARMImage) from TestPassCache
     where Location='$location' and TestPass=@TestPass and 
-    Context is NULL and Status='$StatusNotStarted'"
+    Status='$StatusNotStarted'"
 
     $results = QuerySql $connection $sql $TestPass
 
@@ -377,7 +377,7 @@ function Start-TriggerPipeline($location) {
         update top ($($countList[$i])) TestPassCache
         set Context=$buildId, Status='$StatusRunning', UpdatedDate=getdate()
         where Location='$location' and TestPass=@TestPass and 
-        Context is NULL and Status='$StatusNotStarted'"
+        Status='$StatusNotStarted'"
 
         $parameters = @{"@TestPass" = $testPass }
         ExecuteSql $connection $sql $parameters
@@ -417,38 +417,6 @@ function Update-TestPassCacheDone($connection, $testPass) {
             Runnings.ArmImage = TestResults.Image and
             Runnings.UpdatedDate < TestResults.UpdatedDate
         where Runnings.TestPass = @TestPass and TestResults.Id is not null
-    )"
-    $parameters = @{"@TestPass" = $testPass }
-    ExecuteSql $connection $sql $parameters
-}
-
-function Update-TestPassCacheByFailureId ($connection, $TestPass, $FailureId) {
-    Write-LogInfo "Update test pass cache NotStarted according to FailureId $FailureId"
-    $sql = "
-    With TestPassCaches as (
-        select *
-        from TestPassCache
-        where TestPass=@TestPass
-    ),
-    TestResults as (
-        select *
-        from TestResult 
-        where Id in (
-            select max(TestResult.Id)
-            from TestPass,TestRun,TestResult
-            where TestPass.Name=@TestPass and
-            TestPass.Id = TestRun.TestPassId and
-            TestRun.Id = TestResult.RunId and
-            TestResult.FailureId=$FailureId group by TestResult.Image
-        )
-    )
-    update TestPassCache
-    set Status='$StatusNotStarted', UpdatedDate=getdate(), Context=NULL
-    where TestPass=@TestPass and ID in (
-        select TestPassCaches.ID from TestPassCaches left join TestResults on 
-        TestPassCaches.Location = TestResults.Location and
-        TestPassCaches.ArmImage = TestResults.Image
-        where TestPassCaches.TestPass = @TestPass and TestResults.Id is not null
     )"
     $parameters = @{"@TestPass" = $testPass }
     ExecuteSql $connection $sql $parameters
@@ -550,9 +518,6 @@ try {
     Sync-RunningBuild $connection $TestPass
     Initialize-TestPassCache $connection $TestPass
     Update-TestPassCacheDone $connection $TestPass
-    if ($FailureId) {
-        Update-TestPassCacheByFailureId $connection $TestPass $FailureId
-    }
 
     # Start pipeline
     $sql = "select distinct Location from TestPassCache where TestPass=@Testpass"
