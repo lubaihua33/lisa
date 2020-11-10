@@ -224,7 +224,6 @@ Function Get-CountInOnePipeline([int]$totalCount, [int]$suggestedCount, [int]$co
 
 function ExecuteSql($connection, $sql, $parameters) {
     try {
-        Write-LogDbg "Run sql command: $sql"
         $command = $connection.CreateCommand()
         $command.CommandText = $sql
         if ($parameters) {
@@ -243,7 +242,6 @@ function ExecuteSql($connection, $sql, $parameters) {
 
 function QuerySql($connection, $sql, $testPass) {
     try {
-        Write-LogDbg "Run sql command: $sql"
         $dataset = new-object "System.Data.Dataset"
         $command = $connection.CreateCommand()
         $command.CommandText = $sql
