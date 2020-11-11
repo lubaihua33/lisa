@@ -26,11 +26,11 @@ Write-Host "scriptpath: $scriptPath"
 $commonModulePath = Join-Path $scriptPath "CommonFunctions.psm1"
 Import-Module $commonModulePath
 
-function Update-CaptureImageCacheDone($connection, $captureImage) {
+function Update-CaptureImageInfoDone($connection, $captureImage) {
     Write-LogInfo "Update VHD capture cache done"
 
     $sql = "
-    update CaptureImageCache
+    update CaptureImageInfo
     set Status='$StatusDone', UpdatedDate=getdate()
     where ARMImage='$captureImage'
     )"
@@ -61,9 +61,10 @@ Function Invoke-CaptureVHDTest($ARMImage, $TestLocation)
     .\Run-LisaV2.ps1 `
     -TestLocation $TestLocation `
     -RGIdentifier $RGIdentifier `
-    -TestPlatform  'Azure' `
+    -TestPlatform  "Azure" `
     -ARMImageName $ARMImage `
-    -StorageAccount 'ExistingStorage_Standard' `
+    -StorageAccount "ExistingStorage_Standard" `
+    -TestNames "CAPTURE-VHD-BEFORE-TEST" `
     -XMLSecretFile $AzureSecretsFile `
     -TestIterations 1 `
     -ResourceCleanup Delete `
@@ -105,7 +106,7 @@ try {
     $connection.Open()
 
     $sql = "
-    SELECT ARMImage FROM CaptureImageCache 
+    SELECT ARMImage FROM CaptureImageInfo 
     WHERE Context='$BuildId' and Status='$StatusRunning'"
 
     $results = QuerySql $connection $sql
@@ -118,7 +119,7 @@ try {
 
         $isExist = Search-StorageAccountBlob $image $Location
         if ($isExist -eq $true) {
-            Update-CaptureImageCacheDone $connection $image
+            Update-CaptureImageInfoDone $connection $image
         }
     }
 }
