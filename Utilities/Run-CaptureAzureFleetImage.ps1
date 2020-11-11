@@ -8,16 +8,18 @@
 ###############################################################################################
 Param
 (
-    [parameter(Mandatory=$true)][string] $AzureSecretsFile,
-    [parameter(Mandatory=$true)][string] $StorageAccountName,
-    [parameter(Mandatory=$true)][string] $ResourceGroupName,
-    [parameter(Mandatory=$true)][string] $ContainerName,
-    [parameter(Mandatory=$true)][string] $RGIdentifier
+    [string] $DatabaseSecretsFile,
+    [string] $AzureSecretsFile,
+    [string] $StorageAccountName,
+    [string] $ResourceGroupName,
+    [string] $ContainerName,
+    [string] $RGIdentifier,
+    [string] $dbServerName,
+    [string] $dbName
 )
 
 $StatusRunning = "Running"
 $BuildId = $env:BUILD_BUILDNUMBER
-
 
 $scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Definition
 Write-Host "scriptpath: $scriptPath"
@@ -62,6 +64,7 @@ Function Invoke-CaptureVHDTest($ARMImage, $TestLocation)
     -TestPlatform  'Azure' `
     -ARMImageName $ARMImage `
     -StorageAccount 'ExistingStorage_Standard' `
+    -XMLSecretFile $AzureSecretsFile `
     -TestIterations 1 `
     -ResourceCleanup Delete `
     -VMGeneration 1 `
@@ -69,24 +72,25 @@ Function Invoke-CaptureVHDTest($ARMImage, $TestLocation)
 }
 
 # Read secrets file and terminate if not present.
-Write-Host "Info: Check the Azure Secrets File..."
-if (![String]::IsNullOrEmpty($AzureSecretsFile) -and (Test-Path -Path $AzureSecretsFile)) {
-    $Secrets = ([xml](Get-Content $AzureSecretsFile))
+Write-Host "Info: Check the Database Secrets File..."
+if (![String]::IsNullOrEmpty($DatabaseSecretsFile) -and (Test-Path -Path $DatabaseSecretsFile)) {
+    $content = Get-Content -Path $DatabaseSecretsFile
+    foreach ($line in $content) {
+        if ($line.split(':')[0] -eq 'dbUserName') {
+            $dbuser = $line.split(':')[1].trim()
+        }
+        if ($line.split(':')[0] -eq 'dbPassword') {
+            $dbpassword = $line.split(':')[1].trim()
+        }
+    }
 } else {
-    Write-Host "Error: Please provide value for -AzureSecretsFile"
-    exit 1
-}
-if ((![String]::IsNullOrEmpty($Secrets)) -and (![String]::IsNullOrEmpty($Secrets.secrets))) {
-    Set-Variable -Name XmlSecrets -Value $Secrets -Scope Global -Force
-} else {
-    Write-Host "Secrets file not found. Exiting."
+    Write-LogErr "Please provide value for -DatabaseSecretsFile"
     exit 1
 }
 
-$server = $XmlSecrets.secrets.DatabaseServer
-$dbuser = $XmlSecrets.secrets.DatabaseUser
-$dbpassword = $XmlSecrets.secrets.DatabasePassword
-$database = $XmlSecrets.secrets.DatabaseName
+$database = $dbName
+$server = $dbServerName
+
 if (!$server -or !$dbuser -or !$dbpassword -or !$database) {
     Write-LogErr "Database details are not provided."
     exit 1
