@@ -8,14 +8,14 @@
 ###############################################################################################
 Param
 (
-    [string] $DatabaseSecretsFile,
-    [string] $AzureSecretsFile,
-    [string] $StorageAccountName,
-    [string] $ResourceGroupName,
-    [string] $ContainerName,
-    [string] $RGIdentifier,
-    [string] $dbServerName,
-    [string] $dbName
+    [parameter(Mandatory=$true)][string] $DatabaseSecretsFile,
+    [parameter(Mandatory=$true)][string] $AzureSecretsFile,
+    [parameter(Mandatory=$true)][string] $StorageAccountName,
+    [parameter(Mandatory=$true)][string] $ResourceGroupName,
+    [parameter(Mandatory=$true)][string] $ContainerName,
+    [parameter(Mandatory=$true)][string] $RGIdentifier,
+    [parameter(Mandatory=$true)][string] $dbServerName,
+    [parameter(Mandatory=$true)][string] $dbName
 )
 
 $StatusRunning = "Running"
@@ -52,13 +52,16 @@ function Update-CaptureImageInfoDone($connection, $captureImage, $status, $uri) 
     Write-LogInfo "Update the status of $captureImage $status"
 }
 
-Function Search-StorageAccountBlob ($armImage, $location) {
-    if ($armImage.ToLower().contains(" latest")) {
+Function Search-StorageAccountBlob ($image, $location) {
+    $armImage = $image.split(' ')
+    if ($armImage[3].ToLower() -eq "latest") {
         $images = Get-AzVMImage -Location $location -PublisherName $armImage[0] -Offer $armImage[1] -Skus $armImage[2]
-        $azureBlobName = "$($armImage[0])/$($armImage[1])/$($armImage[2])/$($images[-1].Version)"
+        $azureBlobName = "$($armImage[0])/$($armImage[1])/$($armImage[2])/$($images[-1].Version).vhd"
     } else {
-        $azureBlobName = "$($armImage[0])/$($armImage[1])/$($armImage[2])/$($armImage[3])"
+        $azureBlobName = "$($armImage[0])/$($armImage[1])/$($armImage[2])/$($armImage[3]).vhd"
     }
+
+    .\Utilities\AddAzureRmAccountFromSecretsFile.ps1 -customSecretsFilePath $env:LISA_TESTONLY_SECUREFILEPATH
 
     $context = (Get-AzStorageAccount -ResourceGroupName $ResourceGroupName -Name $StorageAccountName).context
     $blob =  Get-AzStorageBlob -Blob $azureBlobName -Container $ContainerName -Context $context -ErrorAction Ignore

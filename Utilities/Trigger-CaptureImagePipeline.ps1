@@ -8,14 +8,14 @@
 ###############################################################################################
 Param
 (
-    [String] $OrganizationUrl,
-    [String] $AzureDevOpsProjectName,
-    [String] $DevOpsPAT,
-    [String] $ParentPipelineName,
-    [String] $ChildPipelineName,
-    [String] $AzureSecretsFile,
-    [String] $DbServer,
-    [String] $DbName,
+    [parameter(Mandatory=$true)][String] $OrganizationUrl,
+    [parameter(Mandatory=$true)][String] $AzureDevOpsProjectName,
+    [parameter(Mandatory=$true)][String] $DevOpsPAT,
+    [parameter(Mandatory=$true)][String] $ParentPipelineName,
+    [parameter(Mandatory=$true)][String] $ChildPipelineName,
+    [parameter(Mandatory=$true)][String] $AzureSecretsFile,
+    [parameter(Mandatory=$true)][String] $DbServer,
+    [parameter(Mandatory=$true)][String] $DbName,
     [int] $Concurrent = 10,
     [int] $BatchSize = 40
 )
