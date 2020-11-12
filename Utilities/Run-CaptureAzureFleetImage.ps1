@@ -79,7 +79,6 @@ Function Invoke-CaptureVHDTest($ARMImage, $TestLocation)
     -TestNames "CAPTURE-VHD-BEFORE-TEST" `
     -XMLSecretFile $AzureSecretsFile `
     -ResourceCleanup Delete `
-    -VMGeneration 1 `
     -ForceCustom -EnableTelemetry
 
     $report = Get-ChildItem .\Report | Where-Object {($_.FullName).EndsWith("-junit.xml")} | Where-object {$_.CreationTime -gt $startTime}
@@ -141,8 +140,10 @@ try {
         $location = $_.Location
 
         # Not check, we could not check if the vhd file is completeness, just run test
+        # If we can't get the result of the test, nothing need to do. This image will rerun
         $ret = Invoke-CaptureVHDTest $image $Location
         if ($ret -eq $StatusPassed) {
+            # The vhd may exist even if the test is failed
             $vhdUri = Search-StorageAccountBlob $image $Location
             if ($vhdUri) {
                 Update-CaptureImageInfoDone $connection $image $StatusPassed $vhdUri
