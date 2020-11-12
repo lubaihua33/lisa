@@ -81,6 +81,7 @@ Function Invoke-CaptureVHDTest($ARMImage, $TestLocation)
     -ResourceCleanup Delete `
     -ForceCustom -EnableTelemetry -ExitWithZero
 
+    Write-Host "Get the test result..."
     $report = Get-ChildItem .\Report | Where-Object {($_.FullName).EndsWith("-junit.xml")} | Where-object {$_.CreationTime -gt $startTime}
     if ($report -and $report.GetType().BaseType.Name -eq 'FileSystemInfo') {
         $resultXML = [xml](Get-Content "$($report.FullName)" -ErrorAction SilentlyContinue)
