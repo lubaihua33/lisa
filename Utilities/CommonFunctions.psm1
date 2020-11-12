@@ -31,19 +31,19 @@ Function Write-Log() {
 	Write-Host $finalMessage -ForegroundColor $fgColor
 
 	try {
-		if ($LogDir) {
-			if (!(Test-Path $LogDir)) {
-				New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+		if ($PipelineLogDir) {
+			if (!(Test-Path $PipelineLogDir)) {
+				New-Item -ItemType Directory -Force -Path $PipelineLogDir | Out-Null
 			}
 		} else {
-			$LogDir = $env:TEMP
+			$PipelineLogDir = $env:TEMP
 		}
-		if (!$LogFileName) {
-			$LogFileName = "Test-$(Get-Date -Format 'yyyy-MM-dd').log"
+		if (!$PipelineLogFileName) {
+			$PipelineLogFileName = "Pipeline-Test-$(Get-Date -Format 'yyyy-MM-dd').log"
 		}
-		$LogFileFullPath = Join-Path $LogDir $LogFileName
+		$LogFileFullPath = Join-Path $PipelineLogDir $PipelineLogFileName
 		if (!(Test-Path $LogFileFullPath)) {
-			New-Item -path $LogDir -name $LogFileName -type "file" | Out-Null
+			New-Item -path $PipelineLogDir -name $PipelineLogFileName -type "file" | Out-Null
 		}
 		Add-Content -Value $finalMessage -Path $LogFileFullPath -Force
 	} catch {

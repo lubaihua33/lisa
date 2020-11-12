@@ -32,8 +32,8 @@ Write-Host "scriptpath: $scriptPath"
 $commonModulePath = Join-Path $scriptPath "CommonFunctions.psm1"
 Import-Module $commonModulePath
 
-$LogDir = ".\TestResults\pipeline"
-$LogFileName = "pipeline-$(Get-Date -Format 'yyyy-MM-dd').log"
+$PipelineLogDir = ".\TestResults\pipeline"
+$PipelineLogFileName = "pipeline-$(Get-Date -Format 'yyyy-MM-dd').log"
 
 function Update-CaptureImageInfoDone($connection, $captureImage, $status, $uri) {
     if ($uri) {
@@ -83,7 +83,7 @@ Function Invoke-CaptureVHDTest($ARMImage, $TestLocation)
     -ResourceCleanup Delete `
     -ForceCustom -EnableTelemetry -ExitWithZero
 
-    Write-Host "Get the test result..."
+    Write-LogInfo "Get the test result..."
     if (Test-Path -Path ".\Report") {
         $report = Get-ChildItem ".\Report" | Where-Object {($_.FullName).EndsWith("-junit.xml")} | Where-object {$_.CreationTime -gt $startTime}
         if ($report -and $report.GetType().BaseType.Name -eq 'FileSystemInfo') {
@@ -93,7 +93,7 @@ Function Invoke-CaptureVHDTest($ARMImage, $TestLocation)
                 ($resultXML.testsuites.testsuite.skipped -eq 0) -and
                 ($resultXML.testsuites.testsuite.tests -gt 0)) {
                     return "$StatusPassed"
-            } esle {
+            } else {
                     return $StatusFailed
             }
         }
