@@ -79,7 +79,7 @@ Function Invoke-CaptureVHDTest($ARMImage, $TestLocation)
     -TestNames "CAPTURE-VHD-BEFORE-TEST" `
     -XMLSecretFile $AzureSecretsFile `
     -ResourceCleanup Delete `
-    -ForceCustom -EnableTelemetry
+    -ForceCustom -EnableTelemetry -ExitWithZero
 
     $report = Get-ChildItem .\Report | Where-Object {($_.FullName).EndsWith("-junit.xml")} | Where-object {$_.CreationTime -gt $startTime}
     if ($report -and $report.GetType().BaseType.Name -eq 'FileSystemInfo') {
