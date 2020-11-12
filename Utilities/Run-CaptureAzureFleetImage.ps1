@@ -18,7 +18,6 @@ Param
     [string] $dbName
 )
 
-$StatusNotStarted = "NotStarted"
 $StatusRunning = "Running"
 $StatusPassed = "Passed"
 $StatusFailed = "Failed"
@@ -32,6 +31,9 @@ $scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Definition
 Write-Host "scriptpath: $scriptPath"
 $commonModulePath = Join-Path $scriptPath "CommonFunctions.psm1"
 Import-Module $commonModulePath
+
+$LogDir = ".\TestResults\pipeline"
+$LogFileName = "pipeline-$(Get-Date -Format 'yyyy-MM-dd').log"
 
 function Update-CaptureImageInfoDone($connection, $captureImage, $status, $uri) {
     if ($uri) {
@@ -82,20 +84,21 @@ Function Invoke-CaptureVHDTest($ARMImage, $TestLocation)
     -ForceCustom -EnableTelemetry -ExitWithZero
 
     Write-Host "Get the test result..."
-    $report = Get-ChildItem .\Report | Where-Object {($_.FullName).EndsWith("-junit.xml")} | Where-object {$_.CreationTime -gt $startTime}
-    if ($report -and $report.GetType().BaseType.Name -eq 'FileSystemInfo') {
-        $resultXML = [xml](Get-Content "$($report.FullName)" -ErrorAction SilentlyContinue)
-        if (($resultXML.testsuites.testsuite.failures -eq 0) -and
-            ($resultXML.testsuites.testsuite.errors -eq 0) -and
-            ($resultXML.testsuites.testsuite.skipped -eq 0) -and
-            ($resultXML.testsuites.testsuite.tests -gt 0)) {
-                return "$StatusPassed"
-        } esle {
-                return $StatusFailed
+    if (Test-Path -Path ".\Report") {
+        $report = Get-ChildItem ".\Report" | Where-Object {($_.FullName).EndsWith("-junit.xml")} | Where-object {$_.CreationTime -gt $startTime}
+        if ($report -and $report.GetType().BaseType.Name -eq 'FileSystemInfo') {
+            $resultXML = [xml](Get-Content "$($report.FullName)" -ErrorAction SilentlyContinue)
+            if (($resultXML.testsuites.testsuite.failures -eq 0) -and
+                ($resultXML.testsuites.testsuite.errors -eq 0) -and
+                ($resultXML.testsuites.testsuite.skipped -eq 0) -and
+                ($resultXML.testsuites.testsuite.tests -gt 0)) {
+                    return "$StatusPassed"
+            } esle {
+                    return $StatusFailed
+            }
         }
-    } else {
-        Write-LogErr "There is no or more than one report. We can't get the test result."
     }
+    Write-LogErr "There is no or more than one report. We can't get the test result."
 }
 
 # Read secrets file and terminate if not present.
@@ -155,8 +158,14 @@ try {
             Update-CaptureImageInfoDone $connection $image $StatusFailed
         }
     }
-}
-finally {
+} catch {
+    $line = $_.InvocationInfo.ScriptLineNumber
+    $script_name = ($_.InvocationInfo.ScriptName).Replace($PWD,".")
+    $ErrorMessage =  $_.Exception.Message
+
+    Write-LogErr "EXCEPTION: $ErrorMessage"
+    Write-LogErr "Source: Line $line in script $script_name."
+} finally {
     if ($connection) {
         $connection.Close()
         $connection.Dispose()
