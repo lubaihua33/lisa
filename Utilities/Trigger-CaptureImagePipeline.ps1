@@ -299,17 +299,28 @@ try {
 
                     $hasMoreData = $true
                 }
+                Write-LogDbg "The pipeline #Build $($RunningBuildList[$i].BuildID) has stopped"
+                Write-LogDbg "Remove it from the running buildid list"
+                $RunningBuildList.RemoveAt($i)
+                $i--
             }
-            Write-LogDbg "The pipeline #Build $($RunningBuildList[$i].BuildID) has stopped"
-            Write-LogDbg "Remove it from the running buildid list"
-            $RunningBuildList.RemoveAt($i)
-            $i--
         }
         Write-LogInfo "Total $($totalCompleted) completed jobs, still has $($RunningBuildList.Count) running jobs"
         $passedCount = Get-PassedCount $connection
-        $failedCount = Get-FaileddCount $connection
+        $failedCount = Get-FailedCount $connection
         $runningCount = Get-RunningCount $connection
         Write-LogInfo "Total $($passedCount) completed images, $($failedCount) failed images, $($runningCount) running images"
+
+        $sql = "
+        SELECT Count(ARMImage)
+        FROM CaptureImageInfo
+        WHERE Status='$StatusNotStarted'"
+
+        $results = QuerySql $connection $sql
+        $count = ($results[0][0]) -as [int]
+        if ($count -ne 0) {
+            $hasMoreData = $true
+        }
 
         if ($hasMoreData -eq $true -or $RunningBuildList.Count -gt 0) {
             start-sleep -Seconds 120

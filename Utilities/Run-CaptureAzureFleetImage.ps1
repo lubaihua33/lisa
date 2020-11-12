@@ -81,7 +81,7 @@ Function Invoke-CaptureVHDTest($ARMImage, $TestLocation)
     -TestNames "CAPTURE-VHD-BEFORE-TEST" `
     -XMLSecretFile $AzureSecretsFile `
     -ResourceCleanup Delete `
-    -ForceCustom -EnableTelemetry -ExitWithZero
+    -ForceCustom -EnableTelemetry
 
     Write-LogInfo "Get the test result..."
     if (Test-Path -Path ".\Report") {
