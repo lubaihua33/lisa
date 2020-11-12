@@ -1,3 +1,12 @@
+##############################################################################################
+# CommonFunctions.psm1
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the Apache License.
+<#
+.SYNOPSIS
+    PS modules for LISA test pipeline.
+#>
+###############################################################################################
 Function Write-Log() {
 	param
 	(
@@ -129,11 +138,15 @@ function ExecuteSql($connection, $sql, $parameters) {
     }
 }
 
-function QuerySql($connection, $sql) {
+function QuerySql($connection, $sql, $Parameters) {
     try {
         $dataset = new-object "System.Data.Dataset"
         $command = $connection.CreateCommand()
         $command.CommandText = $sql
+        if ($parameters) {
+            $parameters.Keys | ForEach-Object { $command.Parameters.AddWithValue($_, $parameters[$_]) | Out-Null } 
+        }
+
         $dataAdapter = new-object System.Data.SqlClient.SqlDataAdapter
         $dataAdapter.SelectCommand = $command
         $null = $dataAdapter.Fill($dataset)
