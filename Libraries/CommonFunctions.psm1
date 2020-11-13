@@ -504,6 +504,8 @@ function Is-VmAlive {
                 $port = $vm.SSHPort
             }
 
+            $out = Write-Output "y" | .\Tools\plink.exe -C -i $global:sshPrivateKey -P $port "$user@$($vm.PublicIP)" "hostname" 2> $null
+
             $out = Test-TCP -testIP $vm.PublicIP -testport $port
             if ($out -ne "True") {
                 Write-LogInfo "Connecting to $($vm.PublicIP) : $port failed."
@@ -1125,6 +1127,8 @@ Function Detect-LinuxDistro() {
 		[Parameter(Mandatory=$true)][string]$testVMUser,
 		[string]$testVMPassword
 	)
+    $out = Write-Output "y" | .\Tools\plink.exe -C -i $global:sshPrivateKey -P $SSHPort "$testVMUser@$VIP" "hostname"
+    Write-LogInfo "Hostname: $out"
 
 	$global:InitialKernelVersion = Run-LinuxCmd -ip $VIP -port $SSHPort -username $testVMUser -password $testVMPassword -command "uname -r"
 	Write-LogInfo "Initial Kernel Version: $global:InitialKernelVersion"

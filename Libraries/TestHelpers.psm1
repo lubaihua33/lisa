@@ -304,6 +304,11 @@ Function Copy-RemoteFiles($uploadTo, $downloadFrom, $downloadTo, $port, $files, 
 		}
 	} elseif ($download) {
 		foreach ($file in $fileList) {
+			if ($username -ne "root") {
+				$chown_cmd = "chown -Rf ${username}: $file"
+				Write-LogInfo "$chown_cmd"
+				$out = Run-LinuxCmd -username $username -password $password -ip $downloadFrom -port $port -command "$chown_cmd" -runAsSudo
+			}
 			Download-RemoteFile -downloadFrom $downloadFrom -downloadTo $downloadTo -port $port -file $file -username $username `
 				-password $password -usePrivateKey $usePrivateKey $maxRetry
 		}
@@ -418,7 +423,7 @@ Function Run-LinuxCmd([string] $username, [string] $password, [string] $ip, [str
 			{ `
 				$username = $args[1]; $password = $args[2]; $ip = $args[3]; $port = $args[4]; $jcommand = $args[5]; $sshKey = $args[6];`
 				Set-Location $args[0]; `
-				if ($sshKey) { .\Tools\plink.exe -ssh -C -v -i $sshKey -P $port $username@$ip $jcommand; } `
+				if ($sshKey) { Write-Output 'y' | .\Tools\plink.exe -ssh -C -v -i $sshKey -P $port $username@$ip $jcommand; } `
 				else { .\Tools\plink.exe -ssh -C -v -pw $password -P $port $username@$ip $jcommand; } `
 			} `
 			-ArgumentList $currentDir, $username, $password, $ip, $port, $linuxCommand, $sshKey
