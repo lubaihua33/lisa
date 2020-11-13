@@ -32,8 +32,8 @@ Import-Module $commonModulePath
 
 $RunningBuildList = New-Object System.Collections.ArrayList
 
-$LogDir = "trigger-pipeline"
-$LogFileName = "Capture-VHD-$(Get-Date -Format 'yyyy-MM-dd').log"
+$PipelineLogDir = "trigger-pipeline"
+$PipelineLogFileName = "Capture-VHD-$(Get-Date -Format 'yyyy-MM-dd').log"
 
 function Add-RunningBuildList($buildID) {
     $info = @{BuildID = $buildID}
