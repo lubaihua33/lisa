@@ -160,6 +160,7 @@ try {
             Update-CaptureImageInfoDone $connection $image $StatusFailed
         }
     }
+    Write-LogInfo "All tests have completed"
 } catch {
     $line = $_.InvocationInfo.ScriptLineNumber
     $script_name = ($_.InvocationInfo.ScriptName).Replace($PWD,".")

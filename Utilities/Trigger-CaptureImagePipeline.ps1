@@ -169,11 +169,9 @@ function Invoke-BatchTest ($connection, $batchCount) {
     $count = ($results[0][0]) -as [int]
     if ($count -eq 0) {
         return $count
-    } elseif ($count -lt $batchCount) {
-        $imagesCount = $count
-    } else {
-        $imagesCount = $batchCount
     }
+    $imagesCount = [math]::Min($count, $batchCount)
+
 
     $BuildBody = New-Object PSObject -Property @{
         variables = New-Object PSObject -Property @{
@@ -186,7 +184,7 @@ function Invoke-BatchTest ($connection, $batchCount) {
     if ($result -and $result.id) {
         $buildId = $result.id
         $sql = "
-        UPDATE top ($batchCount) CaptureImageInfo
+        UPDATE top ($imagesCount) CaptureImageInfo
         SET Status='$StatusRunning', Context=$buildId
         WHERE Status='$StatusNotStarted'"
         ExecuteSql $connection $sql
@@ -266,7 +264,7 @@ try {
             }
         }
 
-        # Check the status of the running build
+        # Check the status of running build
         for ($i = 0; $i -lt $RunningBuildList.Count; $i++) {
             $buildId = $RunningBuildList[$i].BuildID
             $result = Invoke-Pipeline -OrganizationUrl $OrganizationUrl -AzureDevOpsProjectName $AzureDevOpsProjectName `
