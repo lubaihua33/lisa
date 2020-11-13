@@ -24,8 +24,8 @@ $StatusFailed = "Failed"
 
 $org = "https://dev.azure.com/microsoft"
 $project = "LSG"
-$BuildId = $env:BUILD_BUILDNUMBER
-$BuildUrl =  "$($org)/$($project)/_build/results?buildId=$($BuildId)"
+$buildId = $env:BUILD_BUILDNUMBER
+$buildUrl =  "$($org)/$($project)/_build/results?buildId=$($buildId)"
 
 $scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Definition
 Write-Host "scriptpath: $scriptPath"
@@ -39,12 +39,12 @@ function Update-CaptureImageInfoDone($connection, $captureImage, $status, $uri) 
     if ($uri) {
         $sql = "
         UPDATE CaptureImageInfo
-        SET Status='$status', VhdUri='$uri', BuildUrl='$BuildUrl', UpdatedDate=getdate()
+        SET Status='$status', VhdUri='$uri', BuildUrl='$buildUrl', UpdatedDate=getdate()
         WHERE ARMImage='$captureImage'"
     } else {
         $sql = "
         UPDATE CaptureImageInfo
-        SET Status='$status', BuildUrl='$BuildUrl', UpdatedDate=getdate()
+        SET Status='$status', BuildUrl='$buildUrl', UpdatedDate=getdate()
         WHERE ARMImage='$captureImage'"
     }
 
@@ -139,14 +139,13 @@ try {
 
     $sql = "
     SELECT ARMImage,Location FROM CaptureImageInfo 
-    WHERE Context='$BuildId' and Status='$StatusRunning'"
+    WHERE Context='$buildId' and Status='$StatusRunning'"
 
     $results = QuerySql $connection $sql
     foreach ($_ in $results) {
         $image = $_.ARMImage
         $location = $_.Location
 
-        # Not check, we could not check if the vhd file is completeness, just run test
         # If we can't get the result of the test, nothing need to do. This image will rerun
         $ret = Invoke-CaptureVHDTest $image $Location
         if ($ret -eq $StatusPassed) {

@@ -31,7 +31,6 @@ $commonModulePath = Join-Path $scriptPath "CommonFunctions.psm1"
 Import-Module $commonModulePath
 
 $RunningBuildList = New-Object System.Collections.ArrayList
-$AllBuildList = New-Object System.Collections.ArrayList
 
 $LogDir = "trigger-pipeline"
 $LogFileName = "Capture-VHD-$(Get-Date -Format 'yyyy-MM-dd').log"
@@ -41,31 +40,26 @@ function Add-RunningBuildList($buildID) {
     $RunningBuildList.Add($info) | Out-Null
 }
 
-function Add-AllBuildList($buildID) {
-    $info = @{BuildID = $buildID}
-    $AllBuildList.Add($info) | Out-Null
-}
-
 function Initialize-CaptureImageInfo($connection)
 {
     $sql = "
-    with PassedImages as (
-        select * from TestResult
-        where Id in (
-            select max(TestResult.Id)
-            from TestResult
-            where Status='Passed' group by TestResult.Image
+    WITH PassedImages AS (
+        SELECT * FROM TestResult
+        WHERE Id IN (
+            SELECT max(TestResult.Id)
+            FROM TestResult
+            WHERE Status='Passed' GROUP BY TestResult.Image
         )
     ),
-    CaptureImages as (
-        select PassedImages.Image, PassedImages.Location
-        from PassedImages left join CaptureImageInfo on
+    CaptureImages AS (
+        SELECT PassedImages.Image, PassedImages.Location
+        from PassedImages LEFT JOIN CaptureImageInfo ON
         PassedImages.Image = CaptureImageInfo.ARMImage
-        where CaptureImageInfo.ID is null
+        WHERE CaptureImageInfo.ID is null
     )
-    insert into CaptureImageInfo(ARMImage, Location, Status)
-    select Image, Location, '$StatusNotStarted'
-    from CaptureImages"
+    INSERT INTO CaptureImageInfo(ARMImage, Location, Status)
+    SELECT Image, Location, '$StatusNotStarted'
+    FROM CaptureImages"
 
     Write-LogDbg "Insert into CaptureImageInfo new images"
     ExecuteSql $connection $sql $parameters
@@ -101,9 +95,9 @@ function Sync-RunningBuild ($connection) {
             Write-LogDbg "The builds $buildIdList state is inProgress or postponed"
 
             $sql = "
-            select distinct Context
-            from CaptureImageInfo
-            where Status='$StatusRunning' and 
+            SELECT distinct Context
+            FROM CaptureImageInfo
+            WHERE Status='$StatusRunning' and
             Context in ($buildIdList)"
 
             $results = QuerySql $connection $sql
@@ -112,7 +106,6 @@ function Sync-RunningBuild ($connection) {
 
                 Write-LogInfo "The builds $buildId is still running. Add it into running build list"
                 Add-RunningBuildList $buildId $location
-                Add-AllBuildList $buildId $location
             }
         }
     }
@@ -120,8 +113,8 @@ function Sync-RunningBuild ($connection) {
 
 function Get-MissingCount($connection, $BuildId) {
     $sql = "
-    select Count(ARMImage) from CaptureImageInfo
-    where Context=$BuildId and Status='$StatusRunning'"
+    SELECT Count(ARMImage) FROM CaptureImageInfo
+    WHERE Context=$BuildId and Status='$StatusRunning'"
 
     $results = QuerySql $connection $sql
     $count = ($results[0][0]) -as [int]
@@ -132,8 +125,8 @@ function Get-MissingCount($connection, $BuildId) {
 
 function Get-PassedCount($connection) {
     $sql = "
-    select Count(ARMImage) from CaptureImageInfo
-    where Status='$StatusPassed'"
+    SELECT Count(ARMImage) FROM CaptureImageInfo
+    WHERE Status='$StatusPassed'"
 
     $results = QuerySql $connection $sql
     $count = ($results[0][0]) -as [int]
@@ -144,8 +137,8 @@ function Get-PassedCount($connection) {
 
 function Get-FailedCount($connection) {
     $sql = "
-    select Count(ARMImage) from CaptureImageInfo
-    where Status='$StatusFailed'"
+    SELECT Count(ARMImage) FROM CaptureImageInfo
+    WHERE Status='$StatusFailed'"
 
     $results = QuerySql $connection $sql
     $count = ($results[0][0]) -as [int]
@@ -156,8 +149,8 @@ function Get-FailedCount($connection) {
 
 function Get-RunningCount($connection) {
     $sql = "
-    select Count(ARMImage) from CaptureImageInfo
-    where Status='$StatusRunning'"
+    SELECT Count(ARMImage) FROM CaptureImageInfo
+    WHERE Status='$StatusRunning'"
 
     $results = QuerySql $connection $sql
     $count = ($results[0][0]) -as [int]
@@ -196,12 +189,9 @@ function Invoke-BatchTest ($connection, $batchCount) {
         UPDATE top ($batchCount) CaptureImageInfo
         SET Status='$StatusRunning', Context=$buildId
         WHERE Status='$StatusNotStarted'"
-
         ExecuteSql $connection $sql
 
         Add-RunningBuildList $buildId
-        Add-AllBuildList $buildId
-
         Write-LogInfo "The pipeline #Build $buildId will run $imagesCount images"
         return $imagesCount
     } esle {
@@ -214,7 +204,7 @@ function Invoke-BatchTest ($connection, $batchCount) {
 # The main process
 ###################################################################################################
 
-# Check if have the same VHDCapture pipeline
+# Check if have the same pipeline
 do {
     $isAlreadyExist = $false
     $result = Invoke-Pipeline -OrganizationUrl $OrganizationUrl -AzureDevOpsProjectName $AzureDevOpsProjectName `
@@ -229,7 +219,7 @@ do {
     }
 } while ($isAlreadyExist -eq $true)
 
-# Read secrets file and terminate if not present.
+# Read secrets file and terminate if not present
 Write-LogInfo "Check the Azure Secrets File..."
 if (![String]::IsNullOrEmpty($AzureSecretsFile) -and (Test-Path -Path $AzureSecretsFile)) {
     $content = Get-Content -Path $AzureSecretsFile
@@ -261,14 +251,13 @@ try {
     $connection.ConnectionString = $connectionString
     $connection.Open()
 
-    # Sync all the running job of the same test pass
+    # Sync all the running jobs and initialize table
     Sync-RunningBuild $connection
     Initialize-CaptureImageInfo $connection
 
     $hasMoreData = $true
     $totalCompleted = 0
 
-    # Update status and check completed pipeline    
     while ($hasMoreData -eq $true -or $RunningBuildList.Count -gt 0) {
         while ($RunningBuildList.Count -lt $Concurrent -and $hasMoreData -eq $true) {
             $runCount = Invoke-BatchTest $connection $BatchSize
@@ -277,7 +266,7 @@ try {
             }
         }
 
-        # Check the status of build pipeline
+        # Check the status of the running build
         for ($i = 0; $i -lt $RunningBuildList.Count; $i++) {
             $buildId = $RunningBuildList[$i].BuildID
             $result = Invoke-Pipeline -OrganizationUrl $OrganizationUrl -AzureDevOpsProjectName $AzureDevOpsProjectName `
@@ -327,9 +316,7 @@ try {
         }
     }
     Write-LogInfo "All builds have completed."
-    $AllBuildList
-} 
-catch {
+} catch {
     $line = $_.InvocationInfo.ScriptLineNumber
     $script_name = ($_.InvocationInfo.ScriptName).Replace($PWD,".")
     $ErrorMessage =  $_.Exception.Message
@@ -343,6 +330,5 @@ finally {
         $connection.Close()
         $connection.Dispose()
     }
-
     exit $ExitCode
 }
