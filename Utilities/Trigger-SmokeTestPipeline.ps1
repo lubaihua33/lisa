@@ -75,7 +75,7 @@ function Get-TestPassId ($connection, $TestPass) {
         return $Id
     } else {
         $sql = "
-        insert into TestPass(ProjectId, Name, StartedDate, CreateDate)
+        insert into TestPass(ProjectId, Name, StartedDate, CreatedDate)
         values ('1', @TestPass, getutcdate(), getutcdate())
         select Id from TestPass
         Where ProjectId = 1 and Name = @TestPass

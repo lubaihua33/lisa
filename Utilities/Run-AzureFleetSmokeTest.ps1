@@ -19,6 +19,8 @@ Param
 (
     [string] $AzureSecretsFile,
     [string] $Location,
+    [string] $DbName,
+    [string] $DbServer,
     [string] $TestPass
 )
 
@@ -29,11 +31,11 @@ Function Invoke-SmokeTest($Image, $Location)
     Write-Host "Info: Run smoke test for $Image in $Location"
 
     $logInfo = "Info: .\lisa -r runbook\smoke.yml " +
-    "-v gGallery:$Image -v location:$Location -v testPass:$TestPass -v adminPrivateKeyFile:$env:LISA_PRI_SECUREFILEPATH"
+    "-v gGallery:$Image -v location:$Location -v testPass:$TestPass -v adminPrivateKeyFile:$env:LISA_PRI_SECUREFILEPATH -v dbName $dbName"
     Write-Host $logInfo
 
     .\lisa -r runbook\smoke.yml `
-    -v gGallery:$Image -v location:$Location -v testPass:$TestPass -v adminPrivateKeyFile:$env:LISA_PRI_SECUREFILEPATH
+    -v gGallery:$Image -v location:$Location -v testPass:$TestPass -v dbName:$DbName -v adminPrivateKeyFile:$env:LISA_PRI_SECUREFILEPATH 
 }
 
 # Read secrets file and terminate if not present.
@@ -53,22 +55,8 @@ if (![String]::IsNullOrEmpty($AzureSecretsFile) -and (Test-Path -Path $AzureSecr
     exit 1
 }
 
-# Read variable_database file and terminate if not present.
-$variableFile = ".\runbook\variable_database.yml"
-if (Test-Path -Path $variableFile) {
-    $content = Get-Content -Path $variableFile
-    foreach ($line in $content) {
-        if ($line.split(':')[0] -eq 'dbServerName') {
-            $server = $line.split(':')[1].trim()
-        }
-        if ($line.split(':')[0] -eq 'dbName') {
-            $database = $line.split(':')[1].trim()
-        }
-    }
-} else {
-    Write-Host "Error: No variable_database.yml"
-    exit 1
-}
+$server = $DbServer
+$database = $DbName
 
 if (!$server -or !$dbuser -or !$dbpassword -or !$database) {
     Write-Host "Error: Database details are not provided."
