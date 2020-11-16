@@ -62,7 +62,35 @@ function Add-RunningBuildList($buildID, $location) {
     $RunningBuildList.Add($info) | Out-Null
 }
 
-function Add-TestPassCache($connection, $testPass) {
+function Get-TestPassId ($connection, $TestPass) {
+    $sql = "
+    select Id from TestPass
+    where ProjectId = 1 and Name = @TestPass
+    "
+
+    $parameters = @{"@TestPass" = $testPass}
+    $result = Querysql $connection $sql $parameters
+    if ($result -and $result.Id) {
+        $Id = $result.Id
+        return $Id
+    } else {
+        $sql = "
+        insert into TestPass(ProjectId, Name, StartedDate, CreateDate)
+        values ('1', @TestPass, getutcdate(), getutcdate())
+        select Id from TestPass
+        Where ProjectId = 1 and Name = @TestPass
+        "
+
+        $parameters = @{"@TestPass" = $testPass}
+        $result = QuerySql $connection $sql $parameters
+        if ($result -and $result.Id) {
+            $Id = $result.Id
+            return $Id
+        }
+    }
+}
+
+function Add-TestPassCache($connection, $testPassId) {
     $sql = "
     with groups as (
         select 
@@ -74,25 +102,25 @@ function Add-TestPassCache($connection, $testPass) {
         from [AzureMarketplaceDistroInfo], [AzureLocationInfo]
         where IsAvailable=1 and [AzureMarketplaceDistroInfo].location = [AzureLocationInfo].location
         )
-    insert into TestPassCache(Location, ARMImage, Status, TestPass)
-    select Location, FullName, '$StatusNotStarted', @TestPass
+    insert into TestPassCache(Location, Image, Status, TestPassId, CreatedDate)
+    select Location, FullName, '$StatusNotStarted', @TestPassId, getutcdate()
     from groups
     where groups.rowNumber=1"
 
-    $parameters = @{"@TestPass" = $testPass }
+    $parameters = @{"@TestPassId" = $testPassId }
     ExecuteSql $connection $sql $parameters
 }
 
-function Initialize-TestPassCache($connection, $TestPass)
+function Initialize-TestPassCache($connection, $testPassId)
 {
-    $sql = "select count(*) from TestPassCache where TestPass=@Testpass"
-    $parameters = @{"@TestPass" = $testPass }
+    $sql = "select count(*) from TestPassCache where TestPassId=@TestPassId"
+    $parameters = @{"@TestPassId" = $testPassId }
     $results = QuerySql $connection $sql $parameters
     $dataNumber = ($results[0][0]) -as [int]
 
     if ($dataNumber -eq 0) {
         Write-LogInfo "Initialize test pass cahce"
-        Add-TestPassCache $connection $testPass
+        Add-TestPassCache $connection $testPassId
     }
     else {
         # reset running status
@@ -101,22 +129,22 @@ function Initialize-TestPassCache($connection, $TestPass)
             $buildIdList = [string]::Join(",", $List)
             $sql = "
             UPDATE TestPassCache
-            SET Status='$StatusNotStarted', UpdatedDate=getdate()
-            WHERE TestPass=@TestPass and Status='$StatusRunning' and
+            SET Status='$StatusNotStarted', UpdatedDate=getutcdate()
+            WHERE TestPassId=@TestPassId and Status='$StatusRunning' and
             Context not in ($buildIdList)"
         } else {
             $sql = "
             UPDATE TestPassCache
-            SET Status='$StatusNotStarted', UpdatedDate=getdate()
-            WHERE TestPass=@TestPass and Status='$StatusRunning'"
+            SET Status='$StatusNotStarted', UpdatedDate=getutcdate()
+            WHERE TestPassId=@TestPassId and Status='$StatusRunning'"
         }
-        $parameters = @{"@TestPass" = $testPass }
+        $parameters = @{"@TestPassId" = $testPassId }
         ExecuteSql $connection $sql $parameters
         Write-LogInfo "Reuse existing test pass cache"
     }
 }
 
-function Sync-RunningBuild ($connection, $TestPass) {
+function Sync-RunningBuild ($connection, $testPassId) {
     Write-LogInfo "Sync up with running builds"
     $result = Invoke-Pipeline -OrganizationUrl $OrganizationUrl -AzureDevOpsProjectName $AzureDevOpsProjectName `
                               -PipelineName $ChildPipelineName -DevOpsPAT $DevOpsPAT -OperateMethod "List"
@@ -130,10 +158,10 @@ function Sync-RunningBuild ($connection, $TestPass) {
             $sql = "
             select distinct Context, Location
             from TestPassCache 
-            where TestPass=@TestPass and Status='$StatusRunning' and 
+            where TestPassId=@TestPassId and Status='$StatusRunning' and 
             Context in ($buildIdList)"
 
-            $parameters = @{"@TestPass" = $testPass}
+            $parameters = @{"@TestPassId" = $testPassId}
             $results = QuerySql $connection $sql $parameters
             foreach ($_ in $results) {
                 $buildId = $_.Context
@@ -148,11 +176,11 @@ function Sync-RunningBuild ($connection, $TestPass) {
 
 function Invoke-BatchTest($connection, $location, $batchCount) {
     $sql = "
-    select count(ARMImage) from TestPassCache
-    where Location='$location' and TestPass=@TestPass and 
+    select count(Image) from TestPassCache
+    where Location='$location' and TestPassId=@TestPassId and 
     Status='$StatusNotStarted'"
 
-    $parameters = @{"@TestPass" = $TestPass}
+    $parameters = @{"@TestPassId" = $testPassId}
     $results = QuerySql $connection $sql $parameters
     $count = ($results[0][0]) -as [int]
     if ($count -eq 0) {
@@ -175,11 +203,11 @@ function Invoke-BatchTest($connection, $location, $batchCount) {
         $buildId = $result.id
         $sql = "
         update top ($imagesCount) TestPassCache
-        set Context=$buildId, Status='$StatusRunning', UpdatedDate=getdate()
-        where Location='$location' and TestPass=@TestPass and 
+        set Context=$buildId, Status='$StatusRunning', UpdatedDate=getutcdate()
+        where Location='$location' and TestPassId=@TestPassId and 
         Status='$StatusNotStarted'"
 
-        $parameters = @{"@TestPass" = $testPass }
+        $parameters = @{"@TestPassId" = $testPassId }
         ExecuteSql $connection $sql $parameters
 
         Add-RunningBuildList $buildId $location
@@ -190,13 +218,13 @@ function Invoke-BatchTest($connection, $location, $batchCount) {
     }
 }
 
-function Update-TestPassCacheDone($connection, $testPass) {
+function Update-TestPassCacheDone($connection, $testPassId) {
     Write-LogInfo "Update test pass cache done"
     $sql = "
     With Runnings as (
         select *
         from TestPassCache
-        where TestPass=@TestPass
+        where TestPassId=@TestPassId
             and Status='$StatusRunning'
     ),
     TestResults as (
@@ -204,33 +232,32 @@ function Update-TestPassCacheDone($connection, $testPass) {
         from TestResult 
         where Id in (
             select max(TestResult.Id)
-            from TestPass,TestRun,TestResult
-            where TestPass.Name=@TestPass and
-            TestPass.Id = TestRun.TestPassId and
+            from TestRun,TestResult
+            where TestRun.TestPassId = @TestPassId  and
             TestRun.Id = TestResult.RunId and
             TestResult.Status <> '$NotRun' and
             TestResult.Status <> '$Running' group by TestResult.Image
         )
     )
     update TestPassCache
-    set Status='$StatusDone', UpdatedDate=getdate()
-    where TestPass=@TestPass and ID in (
+    set Status='$StatusDone', UpdatedDate=getutcdate()
+    where TestPassId=@TestPassId and ID in (
         select Runnings.ID from Runnings left join TestResults on 
             Runnings.Location = TestResults.Location and
-            Runnings.ArmImage = TestResults.Image and
+            Runnings.Image = TestResults.Image and
             Runnings.UpdatedDate < TestResults.UpdatedDate
-        where Runnings.TestPass = @TestPass and TestResults.Id is not null
+        where Runnings.TestPassId = @TestPassId and TestResults.Id is not null
     )"
-    $parameters = @{"@TestPass" = $testPass }
+    $parameters = @{"@TestPassId" = $testPassId }
     ExecuteSql $connection $sql $parameters
 }
 
-function Get-MissingCount($connection, $TestPass, $BuildId) {
+function Get-MissingCount($connection, $testPassId, $BuildId) {
     $sql = "
-    select Count(ARMImage) from TestPassCache
+    select Count(Image) from TestPassCache
     where Context=$BuildId and Status='$StatusRunning'"
 
-    $parameters = @{"@TestPass" = $testPass}
+    $parameters = @{"@TestPassId" = $testPassId}
     $results = QuerySql $connection $sql $parameters
     $count = ($results[0][0]) -as [int]
     Write-LogInfo "The missing image count is $count"
@@ -238,12 +265,12 @@ function Get-MissingCount($connection, $TestPass, $BuildId) {
     return $count
 }
 
-function Get-DoneCount($connection, $TestPass) {
+function Get-DoneCount($connection, $testPassId) {
     $sql = "
-    select Count(ARMImage) from TestPassCache
-    where TestPass=@TestPass and Status='$StatusDone'"
+    select Count(Image) from TestPassCache
+    where TestPassId=@TestPassId and Status='$StatusDone'"
 
-    $parameters = @{"@TestPass" = $testPass}
+    $parameters = @{"@TestPassId" = $testPassId}
     $results = QuerySql $connection $sql $parameters
     $count = ($results[0][0]) -as [int]
     Write-LogInfo "The completed count is $count"
@@ -251,12 +278,12 @@ function Get-DoneCount($connection, $TestPass) {
     return $count
 }
 
-function Get-RunningCount($connection, $TestPass) {
+function Get-RunningCount($connection, $testPassId) {
     $sql = "
-    select Count(ARMImage) from TestPassCache
-    where TestPass=@TestPass and Status='$StatusRunning'"
+    select Count(Image) from TestPassCache
+    where TestPassId=@TestPassId and Status='$StatusRunning'"
 
-    $parameters = @{"@TestPass" = $testPass}
+    $parameters = @{"@TestPassId" = $testPassId}
     $results = QuerySql $connection $sql $parameters
     $count = ($results[0][0]) -as [int]
     Write-LogInfo "The running count is $count"
@@ -319,16 +346,19 @@ try {
     $connection.ConnectionString = $connectionString
     $connection.Open()
 
+    # Get the TestPassId from TestPass table
+    $testPassId = Get-TestPassId $connection $TestPass
+
     # Sync all the running job of the same test pass
-    Sync-RunningBuild $connection $TestPass
-    Initialize-TestPassCache $connection $TestPass
+    Sync-RunningBuild $connection $testPassId
+    Initialize-TestPassCache $connection $testPassId
 
     $totalCompleted = 0
     $hasMoreData = $true
 
     # We should distinct location for the scenario of tip session
-    $sql = "select distinct Location from TestPassCache where TestPass=@Testpass"
-    $parameters = @{"@TestPass" = $testPass}
+    $sql = "select distinct Location from TestPassCache where TestPassId=@TestPassId"
+    $parameters = @{"@TestPassId" = $testPassId}
     $rows = QuerySql $connection $sql $parameters
     $hasMoreDataOfLocation = @()
     for ($i = 0; $i -lt $rows.Count; $i++) {
@@ -336,7 +366,7 @@ try {
     }
 
     while ($hasMoreData -eq $true -or $RunningBuildList.Count -gt 0) {
-        Update-TestPassCacheDone $connection $TestPass
+        Update-TestPassCacheDone $connection $testPassId
         for ($i = 0; $i -lt $rows.Count; $i++) {
             $location = $rows[$i].Location
             # todo all the query need location
@@ -361,10 +391,10 @@ try {
             if ($result -and $result.state -ne "inProgress" -and $result.state -ne "postponed") {
                 Write-LogDbg "The pipeline #Build $buildId has stopped"
                 $totalCompleted++
-                Update-TestPassCacheDone $connection $TestPass
+                Update-TestPassCacheDone $connection $testPassId
 
                 Write-LogDbg "Get missing images count in the build $buildId"
-                $missingCount = Get-MissingCount $connection $TestPass $buildId
+                $missingCount = Get-MissingCount $connection $testPassId $buildId
                 if ($missingCount -gt 0) {
                     Write-LogDbg "Update TestPassCache set the status to NotStarted where the status is Running and the Context is $buildId"
                     $sql = "
@@ -382,15 +412,15 @@ try {
             }
         }
         Write-LogInfo "Total $($totalCompleted) completed jobs, $($RunningBuildList.Count) running jobs"
-        $doneCount = Get-DoneCount $connection $TestPass
-        $runningCount = Get-RunningCount $connection $TestPass
+        $doneCount = Get-DoneCount $connection $testPassId
+        $runningCount = Get-RunningCount $connection $testPassId
         Write-LogInfo "Total $($doneCount) completed images, $($runningCount) running images"
 
         $sql = "
-        select count(ARMImage) from TestPassCache
-        where TestPass=@TestPass and Status='$StatusNotStarted'"
+        select count(Image) from TestPassCache
+        where TestPassId=@TestPassId and Status='$StatusNotStarted'"
 
-        $parameters = @{"@TestPass" = $testPass}
+        $parameters = @{"@TestPassId" = $TestPassId}
         $results = QuerySql $connection $sql $parameters
         $count = ($results[0][0]) -as [int]
         if ($count -ne 0) {

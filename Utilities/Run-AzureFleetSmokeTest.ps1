@@ -24,16 +24,16 @@ Param
 
 $StatusRunning = "Running"
 
-Function Invoke-SmokeTest($ARMImage, $Location)
+Function Invoke-SmokeTest($Image, $Location)
 {
-    Write-Host "Info: Run smoke test for $ARMImage in $Location"
+    Write-Host "Info: Run smoke test for $Image in $Location"
 
     $logInfo = "Info: .\lisa -r runbook\smoke.yml " +
-    "-v gGallery:$ARMImage -v location:$Location -v testPass:$TestPass -v adminPrivateKeyFile:$env:LISA_PRI_SECUREFILEPATH"
+    "-v gGallery:$Image -v location:$Location -v testPass:$TestPass -v adminPrivateKeyFile:$env:LISA_PRI_SECUREFILEPATH"
     Write-Host $logInfo
 
     .\lisa -r runbook\smoke.yml `
-    -v gGallery:$ARMImage -v location:$Location -v testPass:$TestPass -v adminPrivateKeyFile:$env:LISA_PRI_SECUREFILEPATH
+    -v gGallery:$Image -v location:$Location -v testPass:$TestPass -v adminPrivateKeyFile:$env:LISA_PRI_SECUREFILEPATH
 }
 
 # Read secrets file and terminate if not present.
@@ -84,7 +84,7 @@ try {
     $connection.ConnectionString = $connectionString
     $connection.Open()
     $sql = "
-    select ARMImage from TestPassCache 
+    select Image from TestPassCache 
     where Context='$BuildId' and Status='$StatusRunning'
     "
     Write-Host "Info: Run sql command: $sql"
@@ -93,8 +93,8 @@ try {
     $null = $dataadapter.Fill($dataset)
 
     foreach ($row in $dataset.Tables.rows) {
-        $image = $row.ARMImage
-        Invoke-SmokeTest -ARMImage $image -Location $Location
+        $image = $row.Image
+        Invoke-SmokeTest -Image $image -Location $Location
     }
 
     $dataadapter.Dispose()
