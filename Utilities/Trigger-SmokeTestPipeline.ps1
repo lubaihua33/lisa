@@ -303,14 +303,18 @@ do {
 
     $List = $result.value | ForEach-Object -Process {if ($_.state -eq 'inProgress' -or $_.state -eq 'postponed') {$_}}
     if ($List.count) {
+        $isAlreadyExist = $true
+        Write-LogInfo "There is already one pipeline to run $TestPass testing. Wait 30s.."
+        start-sleep -Seconds 30
+        <#
         foreach ($_ in $List) {
             if ($_.name -imatch "$TestPass") {
                 $isAlreadyExist = $true
                 Write-LogInfo "There is already one pipeline to run $TestPass testing. Wait 30s.."
                 start-sleep -Seconds 30
-                continue
+                break
             }
-        }
+        }#>
     }
 } while ($isAlreadyExist -eq $true)
 
