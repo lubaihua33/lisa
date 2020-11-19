@@ -10,7 +10,8 @@ Param
     [String] $TestPass,
     [String] $DbServer,
     [String] $DbName,
-    [String] $Title
+    [String] $Title,
+    [String] $TestProject = "Azure Smoke Test"
 )
 
 #Load libraries
@@ -22,15 +23,29 @@ $StatusNotStarted = "NotStarted"
 $StatusRunning = "Running"
 $StatusDone = "Done"
 
-function Get-DoneCount($connection, $testPassId) {
+$Passed = "PASSED"
+$Failed = "FAILED"
+
+function Get-DoneCount($connection, $testPassId, $testResult) {
     $sql = "
-    select Count(Image) from TestPassCache
-    where TestPassId=@TestPassId and Status='$StatusDone'"
+    With 
+    LatestNewResult as (
+        select *
+        from TestResult
+        where Id in (
+            select max(TestResult.Id)
+            from TestResult, TestRun
+            where TestResult.RunId = TestRun.Id and 
+            TestRun.TestPassId = @TestPassId and
+            Image is not null group by image
+        )
+    )
+    select count(*) from LatestNewResult where status='$testResult'"
 
     $parameters = @{"@TestPassId" = $testPassId}
     $results = QuerySql $connection $sql $parameters
     $count = ($results[0][0]) -as [int]
-    Write-LogInfo "The completed count is $count"
+    Write-LogInfo "The $testResult count is $count"
 
     return $count
 }
@@ -74,13 +89,52 @@ function Get-NotStartedCount($connection, $testPassId) {
     return $count
 }
 
-function Get-TestPassId ($connection, $TestPass) {
+function Get-Details ($connection, $testPassId) {
     $sql = "
-    select Id from TestPass
-    where ProjectId = 1 and Name = @TestPass
-    "
+    With LatestResult as (
+        select *
+        from TestResult
+        where Id in (
+            select max(TestResult.Id)
+            from TestResult, TestRun
+            where TestResult.RunId=TestRun.id and
+            TestRun.TestPassId=@TestPassId and
+            Image is not null group by Image
+        )
+    ),
+    FailureSummary as (
+        select count(a.Id) as Count, a.STATUS as Status, a.FailureId, c.Reason
+        from LatestResult a, TestRun b, TestFailure c
+        where a.RunId=b.id and 
+        a.id in (
+            select Id from LatestResult
+        ) and 
+        c.id=a.FailureId
+        group by a.STATUS, a.FailureId, c.Reason
+    ),
+    FailureSample as (
+        select max(id) id, FailureId
+        from LatestResult a
+        group by FailureId
+    )
+    select a.*, b.Id as SampleId, b.Image as SampleImage, b.Message as SampleMessage
+    from FailureSummary a left join LatestResult b on a.FailureId = b.FailureId
+    where b.id in (
+        select id from FailureSample)
+    order by a.status, count desc"
 
-    $parameters = @{"@TestPass" = $testPass}
+    $parameters = @{"@TestPassId" = $testPassId}
+    $results = QuerySql $connection $sql $parameters
+    return $results
+}
+
+function Get-TestPassId ($connection, $testPass, $testProject) {
+    $sql = "
+    select TestPass.Id from TestPass, TestProject
+    where TestProject.Name = @testProject and 
+    TestProject.Id = TestPass.ProjectId and TestPass.Name = @TestPass
+    "
+    $parameters = @{"@TestPass" = $testPass; "@TestProject" = $testProject}
     $result = Querysql $connection $sql $parameters
     if ($result -and $result.Id) {
         $Id = $result.Id
@@ -121,7 +175,7 @@ try {
     $connection.Open()
 
     # Get the TestPassId from TestPass table
-    $testPassId = Get-TestPassId $connection $TestPass
+    $testPassId = Get-TestPassId $connection $TestPass $TestProject
     if (!$testPassId) {
         Write-LogErr "There is no $TestPass record in TestPass table"
         exit 1
@@ -130,7 +184,9 @@ try {
     $totalCount = Get-TotalCount $connection $testPassId
     $notStartedCount = Get-NotStartedCount $connection $testPassId
     $runningCount = Get-RunningCount $connection $testPassId
-    $doneCount = Get-DoneCount $connection $testPassId
+    $failedCount = Get-DoneCount $connection $testPassId $Failed
+    $passedCount = Get-DoneCount $connection $testPassId $Passed
+    $details = Get-Details $connection $testPassId
 } catch {
     $line = $_.InvocationInfo.ScriptLineNumber
     $script_name = ($_.InvocationInfo.ScriptName).Replace($PWD,".")
@@ -160,10 +216,10 @@ $TableStyle = '
   .tm .tm-6k2t{background-color:#D2E4FC;vertical-align:top}
 </style>
 '
-
+# border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse"
 $htmlHeader = '
-<h2>&bull;&nbsp;STATUS_TITLE</h2>
-<table border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse" class="tm">
+<h3>&bull;&nbsp;STATUS_TITLE</h3>
+<table class="tm">
   <tr>
     <th class="tm-dk6e" colspan="9">Azure Fleet Smoke Test Status</th>
   </tr>
@@ -171,17 +227,44 @@ $htmlHeader = '
     <td class="tm-7k3a">Total Images Count</td>
     <td class="tm-7k3a">Not Started</td>
     <td class="tm-7k3a">Running</td>
-    <td class="tm-7k3a">Done</td>
+    <td class="tm-7k3a">Passed</td>
+    <td class="tm-7k3a">Failed</td>
   </tr>
 '
 
-$htmlNodeRed =
+$htmlNode =
 '
   <tr>
     <td class="tm-yw4l">TOTAL</td>
     <td class="tm-yw4l">NOTSTARTED</td>
     <td class="tm-yw4l">RUNNING</td>
-    <td class="tm-yw4l">DONE</td>
+    <td class="tm-yw4l">PASSED</td>
+    <td class="tm-yw4l">FAILED</td>
+  </tr>
+'
+
+$htmlSubHeader = '
+<h4>&bull;&nbsp;Details</h4>
+<table class="tm">
+  <tr>
+    <td class="tm-7k3a">Count</td>
+    <td class="tm-7k3a">Status</td>
+    <td class="tm-7k3a">FailureId</td>
+    <td class="tm-7k3a">Reason</td>
+    <td class="tm-7k3a">SampleId</td>
+    <td class="tm-7k3a">SampleImage</td>
+  </tr>
+'
+
+$htmlSubNode =
+'
+  <tr>
+    <td class="tm-yw4l">COUNT</td>
+    <td class="tm-yw4l">STATUS</td>
+    <td class="tm-yw4l">FAILUREID</td>
+    <td class="tm-yw4l">REASON</td>
+    <td class="tm-yw4l">SAMPLEID</td>
+    <td class="tm-yw4l">SAMPLEIMAGE</td>
   </tr>
 '
 
@@ -197,18 +280,40 @@ if (!(Test-Path -Path ".\AzureFleetSmokeTestStatus.html")) {
 
 #region Get Title...
 
-$htmlHeader = $htmlHeader.Replace("STATUS_TITLE","$Title")
+$htmlHeader = $htmlHeader.Replace("STATUS_TITLE","$Title : $TestPass")
 #endregion
 
 #region build HTML Page
 $finalHTMLString = $htmlHeader
-
-$currentNode = $htmlNodeRed
+$currentNode = $htmlNode
 $currentNode = $currentNode.Replace("TOTAL","$totalCount")
 $currentNode = $currentNode.Replace("NOTSTARTED","$notStartedCount")
 $currentNode = $currentNode.Replace("RUNNING","$runningCount")
-$currentNode = $currentNode.Replace("DONE","$doneCount")
+$currentNode = $currentNode.Replace("PASSED","$passedCount")
+$currentNode = $currentNode.Replace("FAILED","$failedCount")
 $finalHTMLString += $currentNode
+$finalHTMLString += $htmlEnd
+
+$finalHTMLString += $htmlSubHeader
+foreach ($_ in $details) {
+    $count = $_.Count
+    $status = $_.Status
+    $failureId = $_.FailureId
+    $reason = $_.Reason
+    $sampleId = $_.SampleId
+    $sampleImage = $_.SampleImage
+    $sampleMessage = $_.SampleMessage
+
+    $currentNode = $htmlSubNode
+    $currentNode = $currentNode.Replace("COUNT","$count")
+    $currentNode = $currentNode.Replace("STATUS","$status")
+    $currentNode = $currentNode.Replace("FAILUREID","$failureId")
+    $currentNode = $currentNode.Replace("REASON","$reason")
+    $currentNode = $currentNode.Replace("SAMPLEID","$sampleId")
+    $currentNode = $currentNode.Replace("SAMPLEIMAGE","$sampleImage")
+    $finalHTMLString += $currentNode
+}
+
 $finalHTMLString += $htmlEnd
 
 Add-Content -Value $finalHTMLString -Path $ReportHTMLFile
