@@ -8,6 +8,7 @@ Param
 (
     [String] $AzureSecretsFile,
     [String] $TestPass,
+    [String] $PreTestPass,
     [String] $DbServer,
     [String] $DbName,
     [String] $Title,
@@ -28,8 +29,7 @@ $Failed = "FAILED"
 
 function Get-DoneCount($connection, $testPassId, $testResult) {
     $sql = "
-    With 
-    LatestNewResult as (
+    With LatestNewResult as (
         select *
         from TestResult
         where Id in (
@@ -87,6 +87,159 @@ function Get-NotStartedCount($connection, $testPassId) {
     Write-LogInfo "The not started count is $count"
 
     return $count
+}
+
+function Get-NewImagesCount ($connection, $testPassId, $preTestPassId) {
+    $sql = "
+    with new as (
+        select distinct Image from TestPassCache where TestPassId=@TestPassId
+    ),
+    old as (
+        select distinct Image from testresult_old
+    )
+    select count(*)
+    from new left join old on
+    new.Image = old.Image where old.Image is null"
+
+    $parameters = @{"@TestPassId" = $testPassId;}
+    $results = QuerySql $connection $sql $parameters
+    $count = ($results[0][0]) -as [int]
+    Write-LogInfo "The new images count is $count"
+
+    return $count
+
+}
+
+function Get-NotAvailableCount ($connection, $testPassId, $preTestPassId) {
+    $sql = "
+    with new as (
+        select distinct Image from TestPassCache where TestPassId=@TestPassId
+    ),
+    old as (
+        select distinct Image from testresult_old
+    )
+    select count(*)
+    from old left join new on
+    new.Image = old.Image where new.Image is null"
+
+    $parameters = @{"@TestPassId" = $testPassId;}
+    $results = QuerySql $connection $sql $parameters
+    $count = ($results[0][0]) -as [int]
+    Write-LogInfo "The not available images count is $count"
+
+    return $count
+}
+
+function Get-SameImagsCount ($connection, $testPassId, $preTestPassId) {
+    $sql = "
+    with new as (
+        select distinct Image from TestPassCache where TestPassId=@TestPassId
+    ),
+    old as (
+        select distinct Image from testresult_old
+    )
+    select count(*)
+    from old left join new on
+    new.Image = old.Image where new.Image is not null"
+
+    $parameters = @{"@TestPassId" = $testPassId;}
+    $results = QuerySql $connection $sql $parameters
+    $count = ($results[0][0]) -as [int]
+    Write-LogInfo "The same images count is $count"
+
+    return $count
+}
+
+#todo
+function Get-PreTotalCount ($connection, $testPassId, $preTestPassId) {
+    $sql = "
+    select Count(Image) from testresult_old"
+
+    $results = QuerySql $connection $sql
+    $count = ($results[0][0]) -as [int]
+    Write-LogInfo "The previous total count is $count"
+
+    return $count
+}
+
+function Get-NewPassedOldFailedCount ($connection, $testPassId, $preTestPassId) {
+    $sql = "
+    With LatestNewResult as (
+        select *
+        from TestResult
+        where Id in (
+            select max(TestResult.Id)
+            from TestResult, TestRun
+            where TestResult.RunId = TestRun.Id and 
+            TestRun.TestPassId = @TestPassId and
+            Image is not null group by image
+        )
+    )
+    select count(*) as number
+    from testresult_old old, LatestNewResult new
+    where old.Image = new.Image and 
+    new.Status = 'PASSED' and old.Status = 'FAILED'
+    "
+    $parameters = @{"@TestPassId" = $testPassId;}
+    $results = QuerySql $connection $sql $parameters
+    $count = ($results[0][0]) -as [int]
+    Write-LogInfo "$count failed in previous run, but passed in current run"
+
+    return $count
+}
+
+function Get-NewFailedOldPassedCount ($connection, $testPassId, $preTestPassId) {
+    $sql = "
+    With LatestNewResult as (
+        select *
+        from TestResult
+        where Id in (
+            select max(TestResult.Id)
+            from TestResult, TestRun
+            where TestResult.RunId = TestRun.Id and 
+            TestRun.TestPassId = @TestPassId and
+            Image is not null group by image
+        )
+    )
+    select count(*) as number
+    from testresult_old old, LatestNewResult new
+    where old.Image = new.Image and 
+    new.Status = 'FAILED' and old.Status = 'PASSED'
+    "
+    $parameters = @{"@TestPassId" = $testPassId;}
+    $results = QuerySql $connection $sql $parameters
+    $count = ($results[0][0]) -as [int]
+    Write-LogInfo "$count passed in previous run, but failed in current run"
+
+    return $count
+}
+
+function Get-GapDetails ($connection, $testPassId, $preTestPassId) {
+    $sql = "
+    With LatestNewResult as (
+        select *
+        from TestResult
+        where Id in (
+            select max(TestResult.Id)
+            from TestResult, TestRun
+            where TestResult.RunId = TestRun.Id and 
+            TestRun.TestPassId = 3 and
+            Image is not null group by image
+        )
+    )
+    SELECT count(b.id) as Count, a.Status as OldResult, b.Status as NewResult, 
+    a.FailureId as OldFailureId, b.FailureId as NewFailureId, c.Reason as OldReason, d.Reason as NewReason
+    FROM testresult_old a
+    inner JOIN LatestNewResult b ON (a.image = b.Image) left join testfailure c on 
+    c.id=a.FailureId left join testfailure d on d.id=b.FailureId
+    WHERE (a.Status!='PASSED' and b.Status='PASSED') or (a.Status='PASSED' and b.Status!='PASSED')
+    group by a.FailureId, b.FailureId, c.Reason, d.Reason, a.Status, b.Status
+    order by a.Status, Count desc
+    "
+
+    $parameters = @{"@TestPassId" = $testPassId;}
+    $results = QuerySql $connection $sql $parameters
+    return $results
 }
 
 function Get-Details ($connection, $testPassId) {
@@ -180,6 +333,13 @@ try {
         Write-LogErr "There is no $TestPass record in TestPass table"
         exit 1
     }
+<#
+    $preTestPassId = Get-TestPassId $connection $PreviousTestPass $TestProject
+    if (!$preTestPassId) {
+        Write-LogErr "There is no $TestPass record in TestPass table"
+        exit 1
+    }
+    #>
 
     $totalCount = Get-TotalCount $connection $testPassId
     $notStartedCount = Get-NotStartedCount $connection $testPassId
@@ -187,6 +347,19 @@ try {
     $failedCount = Get-DoneCount $connection $testPassId $Failed
     $passedCount = Get-DoneCount $connection $testPassId $Passed
     $details = Get-Details $connection $testPassId
+    $newImagesCount = Get-NewImagesCount $connection $testPassId $preTestPassId
+    $notAvailableCount = Get-NotAvailableCount $connection $testPassId $preTestPassId
+    $sameImagesCount = Get-SameImagsCount $connection $testPassId $preTestPassId
+    $preTotalCount = Get-PreTotalCount $connection
+
+    $runningCount=1
+
+    # Test commpleted, then find the results gaps bewteen two runs
+    if ($runningCount -eq 0 -and $notStartedCount -eq 0) {
+        $newPassedOldFailedCount = Get-NewPassedOldFailedCount $connection $testPassId $preTestPassId
+        $newFailedOldPassedCount = Get-NewFailedOldPassedCount $connection $testPassId $preTestPassId
+        $gapDetails = Get-GapDetails $connection $testPassId $preTestPassId
+    }
 } catch {
     $line = $_.InvocationInfo.ScriptLineNumber
     $script_name = ($_.InvocationInfo.ScriptName).Replace($PWD,".")
@@ -221,9 +394,6 @@ $htmlHeader = '
 <h3>&bull;&nbsp;STATUS_TITLE</h3>
 <table class="tm">
   <tr>
-    <th class="tm-dk6e" colspan="9">Azure Fleet Smoke Test Status</th>
-  </tr>
-  <tr>
     <td class="tm-7k3a">Total Images Count</td>
     <td class="tm-7k3a">Not Started</td>
     <td class="tm-7k3a">Running</td>
@@ -243,8 +413,57 @@ $htmlNode =
   </tr>
 '
 
+$htmlSubHeaderGap1 = '
+<h4>IMAGES_COUNT_GAP</h4>
+<table class="tm">
+  <tr>
+    <td class="tm-7k3a">Previous Run Images Count</td>
+    <td class="tm-7k3a">Current Run Images Count</td>
+    <td class="tm-7k3a">New Images</td>
+    <td class="tm-7k3a">Not Available</td>
+    <td class="tm-7k3a">Same Images</td>
+  </tr>
+'
+$htmlSubNodeGap1 =
+'
+  <tr>
+    <td class="tm-yw4l">PREVIOUS</td>
+    <td class="tm-yw4l">CURRENT</td>
+    <td class="tm-yw4l">NEW</td>
+    <td class="tm-yw4l">NOT_AVAILABLE</td>
+    <td class="tm-yw4l">SAME</td>
+  </tr>
+'
+
+$htmlSubHeaderGap2 = '
+<h3>&bull;&nbsp;RESULTS_GAP_DESC</h3>
+<h4>INCONSISTENT_STATUS</h4>
+<table class="tm">
+  <tr>
+    <td class="tm-7k3a">Count</td>
+    <td class="tm-7k3a">OldResult</td>
+    <td class="tm-7k3a">NewResult</td>
+    <td class="tm-7k3a">OldFailureId</td>
+    <td class="tm-7k3a">OldReason</td>
+    <td class="tm-7k3a">NewFailureId</td>
+    <td class="tm-7k3a">NewReason</td>
+  </tr>
+'
+$htmlSubNodeGap2 =
+'
+  <tr>
+    <td class="tm-yw4l">COUNT</td>
+    <td class="tm-yw4l">OLDRESULT</td>
+    <td class="tm-yw4l">NEWRESULT</td>
+    <td class="tm-yw4l">OLDID</td>
+    <td class="tm-yw4l">OLDREASON</td>
+    <td class="tm-yw4l">NEWID</td>
+    <td class="tm-yw4l">NEWREASON</td>
+  </tr>
+'
+
 $htmlSubHeader = '
-<h4>&bull;&nbsp;Details</h4>
+<h3>&bull;&nbsp;DETAILS</h3>
 <table class="tm">
   <tr>
     <td class="tm-7k3a">Count</td>
@@ -278,11 +497,7 @@ if (!(Test-Path -Path ".\AzureFleetSmokeTestStatus.html")) {
     $htmlHeader = $TableStyle + $htmlHeader
 }
 
-#region Get Title...
-
 $htmlHeader = $htmlHeader.Replace("STATUS_TITLE","$Title : $TestPass")
-#endregion
-
 #region build HTML Page
 $finalHTMLString = $htmlHeader
 $currentNode = $htmlNode
@@ -294,6 +509,44 @@ $currentNode = $currentNode.Replace("FAILED","$failedCount")
 $finalHTMLString += $currentNode
 $finalHTMLString += $htmlEnd
 
+$htmlSubHeaderGap1 = $htmlSubHeaderGap1.Replace("IMAGES_COUNT_GAP","Images gap with previous test pass `"$PreTestPass`"")
+$finalHTMLString += $htmlSubHeaderGap1
+$currentNode = $htmlSubNodeGap1
+$currentNode = $currentNode.Replace("PREVIOUS","$preTotalCount")
+$currentNode = $currentNode.Replace("CURRENT","$totalCount")
+$currentNode = $currentNode.Replace("NEW","$newImagesCount")
+$currentNode = $currentNode.Replace("NOT_AVAILABLE","$notAvailableCount")
+$currentNode = $currentNode.Replace("SAME","$sameImagesCount")
+$finalHTMLString += $currentNode
+$finalHTMLString += $htmlEnd
+
+if ($runningCount -eq 0 -and $notStartedCount -eq 0) {
+    $htmlSubHeaderGap2 = $htmlSubHeaderGap2.Replace("RESULTS_GAP_DESC", "Gaps with previous test pass `"$PreTestPass`"")
+    $htmlSubHeaderGap2 = $htmlSubHeaderGap2.Replace("INCONSISTENT_STATUS", "$newFailedOldPassedCount passed in previous test pass, but failed in current. $newPassedOldFailedCount failed in previous test pass, but passed in current.")
+    $finalHTMLString += $htmlSubHeaderGap2
+    foreach ($_ in $gapDetails) {
+        $count = $_.Count
+        $OldResult = $_.OldResult
+        $NewResult = $_.NewResult
+        $OldFailureId = $_.OldFailureId
+        $OldReason = $_.OldReason
+        $NewFailureId = $_.NewFailureId
+        $NewReason = $_.NewReason
+    
+        $currentNode = $htmlSubNodeGap2
+        $currentNode = $currentNode.Replace("COUNT","$count")
+        $currentNode = $currentNode.Replace("OLDRESULT","$OldResult")
+        $currentNode = $currentNode.Replace("NEWRESULT","$NewResult")
+        $currentNode = $currentNode.Replace("OLDID","$OldFailureId")
+        $currentNode = $currentNode.Replace("OLDREASON","$OldReason")
+        $currentNode = $currentNode.Replace("NEWID","$NewFailureId")
+        $currentNode = $currentNode.Replace("NEWREASON","$NewReason")
+        $finalHTMLString += $currentNode
+    }
+    $finalHTMLString += $htmlEnd
+}
+
+$htmlSubHeader = $htmlSubHeader.Replace("DETAILS", "$TestPass test pass details")
 $finalHTMLString += $htmlSubHeader
 foreach ($_ in $details) {
     $count = $_.Count
@@ -302,7 +555,6 @@ foreach ($_ in $details) {
     $reason = $_.Reason
     $sampleId = $_.SampleId
     $sampleImage = $_.SampleImage
-    $sampleMessage = $_.SampleMessage
 
     $currentNode = $htmlSubNode
     $currentNode = $currentNode.Replace("COUNT","$count")
