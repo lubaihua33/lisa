@@ -153,9 +153,6 @@ $htmlHeader = '
 <h2>&bull;&nbsp;STATUS_TITLE</h2>
 <table border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse" class="tm">
   <tr>
-    <th class="tm-dk6e" colspan="9">Azure Fleet Images Capture Status</th>
-  </tr>
-  <tr>
     <td class="tm-7k3a">Total Images Count</td>
     <td class="tm-7k3a">Not Started</td>
     <td class="tm-7k3a">Running</td>
