@@ -591,8 +591,8 @@ $currentNode = $currentNode.Replace("SAME","$sameImagesCount")
 $finalHTMLString += $currentNode
 $finalHTMLString += $htmlEnd
 
-$inconsistentStatus = "$newFailedOldPassedCount passed in previous test pass, but failed in current. " +
-                      "$newPassedOldFailedCount failed in previous test pass, but passed in current."
+$inconsistentStatus = "$newFailedOldPassedCount passed in previous test pass, but failed in the latest test pass. " +
+                      "$newPassedOldFailedCount failed in previous test pass, but passed in the latest test pass."
 $ResultGapHeader = $ResultGapHeader.Replace("RESULTS_GAP_DESC", "Gaps with $PreTestPass test pass")
 $ResultGapHeader = $ResultGapHeader.Replace("INCONSISTENT_STATUS", "$inconsistentStatus")
 $finalHTMLString += $ResultGapHeader
