@@ -306,6 +306,40 @@ function Get-Details ($connection, $testPassId) {
     return $results
 }
 
+function Get-UnknownFailure ($connection, $testPassId) {
+    $sql = "
+    With LatestResult as (
+        select *
+        from TestResult
+        where Id in (
+            select max(TestResult.Id)
+            from TestResult, TestRun
+            where TestResult.RunId=TestRun.id and
+            TestRun.TestPassId=@TestPassId and
+            Image is not null group by Image
+        )
+    ),
+    FailureSummary as (
+        select count(a.Id) as Count, a.STATUS as Status, a.FailureId
+        from LatestResult a
+        where Status='FAILED' and FailureId='-1'
+              group by a.STATUS, a.FailureId
+    ),
+    FailureSample as (
+        select max(id) id from LatestResult a 
+        where FailureId='-1' and Status='FAILED'
+    )
+    select a.*, b.Id as SampleId, b.Image as SampleImage, b.Message as SampleMessage
+    from FailureSummary a left join LatestResult b on a.FailureId = b.FailureId
+    where b.id in (
+        select id from FailureSample)
+    order by a.status, count desc"
+
+    $parameters = @{"@TestPassId" = $testPassId}
+    $results = QuerySql $connection $sql $parameters
+    return $results
+}
+
 function Get-TestPassIdList ($connection, $testProject, $testPassCount) {
     $sql = "
     select top(@TestPassCount) TestPass.Id from TestPass, TestProject
@@ -421,6 +455,7 @@ try {
     }
 
     $details = Get-Details $connection $latestTestPassId
+    $unknowFailures = Get-UnknownFailure $connection $latestTestPassId
     $newImagesCount = Get-NewImagesCount $connection $latestTestPassId $preTestPassId
     $notAvailableCount = Get-NotAvailableCount $connection $latestTestPassId $preTestPassId
     $sameImagesCount = Get-SameImagsCount $connection $latestTestPassId $preTestPassId
@@ -447,13 +482,13 @@ finally {
 $TableStyle = '
 <style type="text/css">
   .tm  {border-collapse:collapse;border-spacing:0;border-color:#999;}
-  .tm td{font-family:Arial, sans-serif;font-size:13px;padding:8px 5px;border-style:solid;border-width:1px;overflow:hidden;word-break:normal;border-color:#999;color:#444;background-color:#F7FDFA;}
-  .tm th{font-family:Arial, sans-serif;font-size:14px;font-weight:normal;padding:10px 5px;border-style:solid;border-width:1px;overflow:hidden;word-break:normal;border-color:#999;color:#fff;background-color:#26ADE4;}
+  .tm td{font-family:Arial, sans-serif;font-size:13px;padding:8px 5px;border-style:solid;border-width:1px;overflow:hidden;word-break:break-word;border-color:#999;color:#444;background-color:#F7FDFA;}
+  .tm th{font-family:Arial, sans-serif;font-size:14px;font-weight:normal;padding:10px 5px;border-style:solid;border-width:1px;overflow:hidden;word-break:break-word;border-color:#999;color:#fff;background-color:#26ADE4;}
   .tm .tm-dk6e{font-weight:bold;color:#ffffff;text-align:center;vertical-align:top}
   .tm .tm-xa7z{background-color:#ffccc9;vertical-align:top}
   .tm .tm-ys9u{background-color:#b3ffd9;vertical-align:top}
   .tm .tm-7k3a{background-color:#D2E4FC;font-weight:bold;text-align:center;vertical-align:top}
-  .tm .tm-yw4l{vertical-align:top}
+  .tm .tm-yw4l{vertical-align:top;text-align:center}
   .tm .tm-6k2t{background-color:#D2E4FC;vertical-align:top}
 </style>
 '
@@ -498,20 +533,24 @@ $imagesCountGapNode ='
   </tr>
   <tr>
     <td class="tm-7k3a">Same Images</td>
-    <td class="tm-yw4l"></td>
+    <td class="tm-yw4l">SAME</td>
   </tr>
   <tr>
-    <td class="tm-7k3a">Last Failed->Passed</td>
+    <td class="tm-7k3a">Failed->Passed</td>
     <td class="tm-yw4l">FAILEDPASSED</td>
   </tr>
   <tr>
-    <td class="tm-7k3a">Last Passed->Failed</td>
+    <td class="tm-7k3a">Passed->Failed</td>
     <td class="tm-yw4l">PASSEDFAILED</td>
   </tr>
 '
 
 $ResultGapHeader = '
 <h3>&bull;&nbsp;RESULTS_GAP_DESC</h3>
+'
+
+$ResultGapTabHeader = '
+<h4>&nbsp;Details</h4>
 <table class="tm">
   <tr>
     <td class="tm-7k3a">Count</td>
@@ -530,34 +569,36 @@ $ResultGapNode =
     <td class="tm-yw4l">OLDRESULT</td>
     <td class="tm-yw4l">NEWRESULT</td>
     <td class="tm-yw4l">OLDID</td>
-    <td class="tm-yw4l">OLDREASON</td>
+    <td class="tm-yw4l"; style="text-align:left">OLDREASON</td>
     <td class="tm-yw4l">NEWID</td>
-    <td class="tm-yw4l">NEWREASON</td>
+    <td class="tm-yw4l"; style="text-align:left">NEWREASON</td>
   </tr>
 '
 
 $htmlSubHeader = '
 <h3>&bull;&nbsp;DETAILS</h3>
-<table class="tm">
+<table class="tm"; style="width:1110px;table-layout:fixed;">
   <tr>
-    <td class="tm-7k3a">Count</td>
-    <td class="tm-7k3a">Status</td>
-    <td class="tm-7k3a">FailureId</td>
-    <td class="tm-7k3a">Reason</td>
-    <td class="tm-7k3a">SampleId</td>
-    <td class="tm-7k3a">SampleImage</td>
+    <td class="tm-7k3a"; style="width: 40px;">Count</td>
+    <td class="tm-7k3a"; style="width: 55px;">Status</td>
+    <td class="tm-7k3a"; style="width: 55px;">FailureId</td>
+    <td class="tm-7k3a"; style="width: 200px;">Reason</td>
+    <td class="tm-7k3a"; style="width: 60px;">SampleId</td>
+    <td class="tm-7k3a"; style="width: 200px;">SampleImage</td>
+    <td class="tm-7k3a"; style="width: 500px;">SampleMessage</td>
   </tr>
 '
 
 $htmlSubNode =
 '
   <tr>
-    <td class="tm-yw4l">COUNT</td>
-    <td class="tm-yw4l">STATUS</td>
-    <td class="tm-yw4l">FAILUREID</td>
-    <td class="tm-yw4l">REASON</td>
-    <td class="tm-yw4l">SAMPLEID</td>
-    <td class="tm-yw4l">SAMPLEIMAGE</td>
+    <td class="tm-yw4l"; style="width: 40px;">COUNT</td>
+    <td class="tm-yw4l"; style="width: 55px;">STATUS</td>
+    <td class="tm-yw4l"; style="width: 55px;">FAILUREID</td>
+    <td class="tm-yw4l"; style="width: 200px; text-align:left">REASON</td>
+    <td class="tm-yw4l"; style="width: 60px;">SAMPLEID</td>
+    <td class="tm-yw4l"; style="width: 200px; text-align:left">SAMPLEIMAGE</td>
+    <td class="tm-yw4l"; style="width: 500px; text-align:left">SAMPLEMESSAGE</td>
   </tr>
 '
 
@@ -587,6 +628,9 @@ foreach ($_ in $statusSummaryList) {
 }
 $finalHTMLString += $htmlEnd
 
+$ResultGapHeader = $ResultGapHeader.Replace("RESULTS_GAP_DESC", "Difference with $PreTestPass")
+$finalHTMLString += $ResultGapHeader
+
 # Get the detail information
 $currentNode = $imagesCountGapNode
 $currentNode = $currentNode.Replace("NEW","$newImagesCount")
@@ -597,8 +641,7 @@ $currentNode = $currentNode.Replace("PASSEDFAILED","$newFailedOldPassedCount")
 $finalHTMLString += $currentNode
 $finalHTMLString += $htmlEnd
 
-$ResultGapHeader = $ResultGapHeader.Replace("RESULTS_GAP_DESC", "Gaps with $PreTestPass test pass")
-$finalHTMLString += $ResultGapHeader
+$finalHTMLString += $ResultGapTabHeader
 foreach ($_ in $gapDetails) {
     $count = $_.Count
     $OldResult = $_.OldResult
@@ -629,6 +672,7 @@ foreach ($_ in $details) {
     $reason = $_.Reason
     $sampleId = $_.SampleId
     $sampleImage = $_.SampleImage
+    $sampleMessage = $_.SampleMessage
 
     $currentNode = $htmlSubNode
     $currentNode = $currentNode.Replace("COUNT","$count")
@@ -637,6 +681,19 @@ foreach ($_ in $details) {
     $currentNode = $currentNode.Replace("REASON","$reason")
     $currentNode = $currentNode.Replace("SAMPLEID","$sampleId")
     $currentNode = $currentNode.Replace("SAMPLEIMAGE","$sampleImage")
+    $currentNode = $currentNode.Replace("SAMPLEMESSAGE","$sampleMessage")
+    $finalHTMLString += $currentNode
+}
+
+if ($unknowFailures) {
+    $currentNode = $htmlSubNode
+    $currentNode = $currentNode.Replace("COUNT","$($unknowFailures.Count)")
+    $currentNode = $currentNode.Replace("STATUS","$($unknowFailures.Status)")
+    $currentNode = $currentNode.Replace("FAILUREID","$($unknowFailures.FailureId)")
+    $currentNode = $currentNode.Replace("REASON","")
+    $currentNode = $currentNode.Replace("SAMPLEID","$($unknowFailures.SampleId)")
+    $currentNode = $currentNode.Replace("SAMPLEIMAGE","$($unknowFailures.SampleImage)")
+    $currentNode = $currentNode.Replace("SAMPLEMESSAGE","$($unknowFailures.SampleMessage)")
     $finalHTMLString += $currentNode
 }
 
