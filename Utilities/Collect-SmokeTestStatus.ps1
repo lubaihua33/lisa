@@ -416,6 +416,7 @@ try {
         $statusSummary["Running"] = Get-RunningCount $connection $_
         $statusSummary["Failed"] = Get-DoneCount $connection $_ $Failed
         $statusSummary["Passed"] = Get-DoneCount $connection $_ $Passed
+        $statusSummary["Done"] = $statusSummary["Failed"] + $statusSummary["Passed"]
         $statusSummaryList += @($statusSummary)
     }
 
@@ -466,6 +467,7 @@ $summaryHeader = '
     <td class="tm-7k3a">Total Images</td>
     <td class="tm-7k3a">Not Started</td>
     <td class="tm-7k3a">Running</td>
+    <td class="tm-7k3a">Done</td>
     <td class="tm-7k3a">Passed</td>
     <td class="tm-7k3a">Failed</td>
   </tr>
@@ -478,14 +480,12 @@ $summaryNode =
     <td class="tm-yw4l">TOTAL</td>
     <td class="tm-yw4l">NOTSTARTED</td>
     <td class="tm-yw4l">RUNNING</td>
+    <td class="tm-yw4l">DONE</td>
     <td class="tm-yw4l">PASSED</td>
     <td class="tm-yw4l">FAILED</td>
   </tr>
 '
 
-$imagesCountGapHeader = '
-<h4>&nbsp;IMAGES_COUNT_GAP</h4>
-'
 $imagesCountGapNode ='
 <table class="tm">
   <tr>
@@ -498,13 +498,20 @@ $imagesCountGapNode ='
   </tr>
   <tr>
     <td class="tm-7k3a">Same Images</td>
-    <td class="tm-yw4l">SAME</td>
+    <td class="tm-yw4l"></td>
+  </tr>
+  <tr>
+    <td class="tm-7k3a">Last Failed->Passed</td>
+    <td class="tm-yw4l">FAILEDPASSED</td>
+  </tr>
+  <tr>
+    <td class="tm-7k3a">Last Passed->Failed</td>
+    <td class="tm-yw4l">PASSEDFAILED</td>
   </tr>
 '
 
 $ResultGapHeader = '
 <h3>&bull;&nbsp;RESULTS_GAP_DESC</h3>
-<h4>&nbsp;INCONSISTENT_STATUS</h4>
 <table class="tm">
   <tr>
     <td class="tm-7k3a">Count</td>
@@ -573,6 +580,7 @@ foreach ($_ in $statusSummaryList) {
     $currentNode = $currentNode.Replace("TOTAL","$($_["Total Images"])")
     $currentNode = $currentNode.Replace("NOTSTARTED","$($_["Not Started"])")
     $currentNode = $currentNode.Replace("RUNNING","$($_["Running"])")
+    $currentNode = $currentNode.Replace("DONE","$($_["Done"])")
     $currentNode = $currentNode.Replace("PASSED","$($_["Passed"])")
     $currentNode = $currentNode.Replace("FAILED","$($_["Failed"])")
     $finalHTMLString += $currentNode
@@ -580,21 +588,16 @@ foreach ($_ in $statusSummaryList) {
 $finalHTMLString += $htmlEnd
 
 # Get the detail information
-$imagesCountGap = "Compared with $PretestPass test pass, new images count is $newImagesCount, " + 
-                  "$notAvailableCount images are not available, $sameImagesCount images are in both test pass."
-$imagesCountGapHeader = $imagesCountGapHeader.Replace("IMAGES_COUNT_GAP", "$imagesCountGap")
-$finalHTMLString += $imagesCountGapHeader
 $currentNode = $imagesCountGapNode
 $currentNode = $currentNode.Replace("NEW","$newImagesCount")
 $currentNode = $currentNode.Replace("NOT_AVAILABLE","$notAvailableCount")
 $currentNode = $currentNode.Replace("SAME","$sameImagesCount")
+$currentNode = $currentNode.Replace("FAILEDPASSED","$newPassedOldFailedCount")
+$currentNode = $currentNode.Replace("PASSEDFAILED","$newFailedOldPassedCount")
 $finalHTMLString += $currentNode
 $finalHTMLString += $htmlEnd
 
-$inconsistentStatus = "$newFailedOldPassedCount passed in previous test pass, but failed in the latest test pass. " +
-                      "$newPassedOldFailedCount failed in previous test pass, but passed in the latest test pass."
 $ResultGapHeader = $ResultGapHeader.Replace("RESULTS_GAP_DESC", "Gaps with $PreTestPass test pass")
-$ResultGapHeader = $ResultGapHeader.Replace("INCONSISTENT_STATUS", "$inconsistentStatus")
 $finalHTMLString += $ResultGapHeader
 foreach ($_ in $gapDetails) {
     $count = $_.Count
