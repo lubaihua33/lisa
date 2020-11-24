@@ -16,7 +16,7 @@ Param
     [String] $DbServer,
     [String] $DbName,
     [String] $Title,
-    [String] $TestPassCount,
+    [int] $TestPassCount,
     [String] $TestProject = "Azure Smoke Test"
 )
 
@@ -392,6 +392,8 @@ try {
         }
         $latestTestPassId = $testPassIdList[0]
         $preTestPassId = $testPassIdList[1]
+        $TestPass = Get-TestPassName $connection $latestTestPassId
+        $PreTestPass = Get-TestPassName $connection $preTestPassId
     }
 
     if ($TestPass -and $PreTestPass) {
@@ -427,7 +429,8 @@ try {
     }
 
     $details = Get-Details $connection $latestTestPassId
-    foreach ($_ in $details) {if ($_.FailureId -eq '-1') {$unknowFailuresCount = $_.Count}}
+    foreach ($_ in $details) {if ($_.FailureId -eq '-1') {$unknowFailuresCount = $_.Count; break}}
+    if (!$unknowFailuresCount) {$unknowFailuresCount = 0}
     $newImagesCount = Get-NewImagesCount $connection $latestTestPassId $preTestPassId
     $notAvailableCount = Get-NotAvailableCount $connection $latestTestPassId $preTestPassId
     $sameImagesCount = Get-SameImagsCount $connection $latestTestPassId $preTestPassId
