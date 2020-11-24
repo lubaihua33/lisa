@@ -257,7 +257,7 @@ function Get-GapDetails ($connection, $testPassId, $preTestPassId) {
     FROM OldResult a
     inner JOIN LatestNewResult b ON (a.image = b.Image) left join testfailure c on 
     c.id=a.FailureId left join testfailure d on d.id=b.FailureId
-    WHERE (a.Status!='PASSED' and b.Status='PASSED') or (a.Status='PASSED' and b.Status!='PASSED')
+    WHERE (a.Status='FAILED' and b.Status='PASSED') or (a.Status='PASSED' and b.Status='FAILED')
     group by a.FailureId, b.FailureId, c.Reason, d.Reason, a.Status, b.Status
     order by a.Status, Count desc
     "
@@ -280,23 +280,25 @@ function Get-Details ($connection, $testPassId) {
             Image is not null group by Image
         )
     ),
-    FailureSummary as (
-        select count(a.Id) as Count, a.STATUS as Status, a.FailureId, c.Reason
-        from LatestResult a, TestRun b, TestFailure c
-        where a.RunId=b.id and 
-        a.id in (
-            select Id from LatestResult
-        ) and 
-        c.id=a.FailureId
-        group by a.STATUS, a.FailureId, c.Reason
+    FailureGroup as (
+        select count(a.Id) as Count, a.STATUS as Status, a.FailureId
+        from LatestResult a
+        where a.FailureId!='-1' or (a.FailureId='-1' and a.Status='FAILED')
+        group by a.STATUS, a.FailureId
+    ),
+    FailureSummary as(
+        select a.*, b.Reason
+        from FailureGroup a left join TestFailure b on b.id=a.FailureId
     ),
     FailureSample as (
         select max(id) id, FailureId
         from LatestResult a
+        where (a.Status='FAILED' and a.FailureId='-1') or a.FailureId!='-1'
         group by FailureId
     )
     select a.*, b.Id as SampleId, b.Image as SampleImage, b.Message as SampleMessage
     from FailureSummary a left join LatestResult b on a.FailureId = b.FailureId
+    and a.Status = b.Status
     where b.id in (
         select id from FailureSample)
     order by a.status, count desc"
@@ -306,39 +308,6 @@ function Get-Details ($connection, $testPassId) {
     return $results
 }
 
-function Get-UnknownFailure ($connection, $testPassId) {
-    $sql = "
-    With LatestResult as (
-        select *
-        from TestResult
-        where Id in (
-            select max(TestResult.Id)
-            from TestResult, TestRun
-            where TestResult.RunId=TestRun.id and
-            TestRun.TestPassId=@TestPassId and
-            Image is not null group by Image
-        )
-    ),
-    FailureSummary as (
-        select count(a.Id) as Count, a.STATUS as Status, a.FailureId
-        from LatestResult a
-        where Status='FAILED' and FailureId='-1'
-              group by a.STATUS, a.FailureId
-    ),
-    FailureSample as (
-        select max(id) id from LatestResult a 
-        where FailureId='-1' and Status='FAILED'
-    )
-    select a.*, b.Id as SampleId, b.Image as SampleImage, b.Message as SampleMessage
-    from FailureSummary a left join LatestResult b on a.FailureId = b.FailureId
-    where b.id in (
-        select id from FailureSample)
-    order by a.status, count desc"
-
-    $parameters = @{"@TestPassId" = $testPassId}
-    $results = QuerySql $connection $sql $parameters
-    return $results
-}
 
 function Get-TestPassIdList ($connection, $testProject, $testPassCount) {
     $sql = "
@@ -415,25 +384,28 @@ try {
 
     # Get the TestPassId list from TestPass table
     $testPassIdList = @()
-    if ($testPassCount) {
+    if ($testPassCount -and $testPassCount -ge 2) {
         $testPassIdList = Get-TestPassIdList $connection $TestProject $TestPassCount
         if (!$testPassIdList) {
             Write-LogErr "There is no record for $TestProject in TestPass table"
             exit 1
         }
+        $latestTestPassId = $testPassIdList[0]
+        $preTestPassId = $testPassIdList[1]
     }
 
-    # Get the latest TestPassId and previous TestPassId
-    $latestTestPassId = Get-TestPassId $connection $TestProject $TestPass
-    if (!$latestTestPassId) {
-        Write-LogErr "There is no $TestPass record for $TestProject in TestPass table"
-        exit 1
-    }
+    if ($TestPass -and $PreTestPass) {
+        $latestTestPassId = Get-TestPassId $connection $TestProject $TestPass
+        if (!$latestTestPassId) {
+            Write-LogErr "There is no $TestPass record for $TestProject in TestPass table"
+            exit 1
+        }
 
-    $preTestPassId = Get-TestPassId $connection $TestProject $PreTestPass
-    if (!$preTestPassId) {
-        Write-LogErr "There is no $PreTestPass record for $TestProject in TestPass table"
-        exit 1
+        $preTestPassId = Get-TestPassId $connection $TestProject $PreTestPass
+        if (!$preTestPassId) {
+            Write-LogErr "There is no $PreTestPass record for $TestProject in TestPass table"
+            exit 1
+        }
     }
 
     $statusSummaryList = @()
@@ -455,7 +427,7 @@ try {
     }
 
     $details = Get-Details $connection $latestTestPassId
-    $unknowFailures = Get-UnknownFailure $connection $latestTestPassId
+    foreach ($_ in $details) {if ($_.FailureId -eq '-1') {$unknowFailuresCount = $_.Count}}
     $newImagesCount = Get-NewImagesCount $connection $latestTestPassId $preTestPassId
     $notAvailableCount = Get-NotAvailableCount $connection $latestTestPassId $preTestPassId
     $sameImagesCount = Get-SameImagsCount $connection $latestTestPassId $preTestPassId
@@ -543,6 +515,10 @@ $imagesCountGapNode ='
     <td class="tm-7k3a">Passed->Failed</td>
     <td class="tm-yw4l">PASSEDFAILED</td>
   </tr>
+  <tr>
+    <td class="tm-7k3a">Unknown Failures</td>
+    <td class="tm-yw4l">UNKNOWNFAILURES</td>
+  </tr>
 '
 
 $ResultGapHeader = '
@@ -550,7 +526,7 @@ $ResultGapHeader = '
 '
 
 $ResultGapTabHeader = '
-<h4>&nbsp;Details</h4>
+<h4 style="font-weight:normal">&nbsp;Group by failure id</h4>
 <table class="tm">
   <tr>
     <td class="tm-7k3a">Count</td>
@@ -638,6 +614,7 @@ $currentNode = $currentNode.Replace("NOT_AVAILABLE","$notAvailableCount")
 $currentNode = $currentNode.Replace("SAME","$sameImagesCount")
 $currentNode = $currentNode.Replace("FAILEDPASSED","$newPassedOldFailedCount")
 $currentNode = $currentNode.Replace("PASSEDFAILED","$newFailedOldPassedCount")
+$currentNode = $currentNode.Replace("UNKNOWNFAILURES","$unknowFailuresCount")
 $finalHTMLString += $currentNode
 $finalHTMLString += $htmlEnd
 
@@ -663,7 +640,7 @@ foreach ($_ in $gapDetails) {
 }
 $finalHTMLString += $htmlEnd
 
-$htmlSubHeader = $htmlSubHeader.Replace("DETAILS", "Details of $TestPass test pass")
+$htmlSubHeader = $htmlSubHeader.Replace("DETAILS", "Details of $TestPass Test Pass")
 $finalHTMLString += $htmlSubHeader
 foreach ($_ in $details) {
     $count = $_.Count
@@ -684,19 +661,6 @@ foreach ($_ in $details) {
     $currentNode = $currentNode.Replace("SAMPLEMESSAGE","$sampleMessage")
     $finalHTMLString += $currentNode
 }
-
-if ($unknowFailures) {
-    $currentNode = $htmlSubNode
-    $currentNode = $currentNode.Replace("COUNT","$($unknowFailures.Count)")
-    $currentNode = $currentNode.Replace("STATUS","$($unknowFailures.Status)")
-    $currentNode = $currentNode.Replace("FAILUREID","$($unknowFailures.FailureId)")
-    $currentNode = $currentNode.Replace("REASON","")
-    $currentNode = $currentNode.Replace("SAMPLEID","$($unknowFailures.SampleId)")
-    $currentNode = $currentNode.Replace("SAMPLEIMAGE","$($unknowFailures.SampleImage)")
-    $currentNode = $currentNode.Replace("SAMPLEMESSAGE","$($unknowFailures.SampleMessage)")
-    $finalHTMLString += $currentNode
-}
-
 $finalHTMLString += $htmlEnd
 
 Add-Content -Value $finalHTMLString -Path $ReportHTMLFile
