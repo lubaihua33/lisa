@@ -17,7 +17,7 @@ Param
     [String] $DbName,
     [String] $Title,
     [int] $TestPassCount,
-    [String] $TestProject = "Azure Smoke Test"
+    [String] $TestProject = "Azure Fleet"
 )
 
 # Load libraries
@@ -529,7 +529,7 @@ $ResultGapHeader = '
 '
 
 $ResultGapTabHeader = '
-<h4 style="font-weight:normal">&nbsp;Group by failure id</h4>
+<h4 style="font-weight:normal">&nbsp;Differences Grouped by failure reason</h4>
 <table class="tm">
   <tr>
     <td class="tm-7k3a">Count</td>
@@ -607,7 +607,7 @@ foreach ($_ in $statusSummaryList) {
 }
 $finalHTMLString += $htmlEnd
 
-$ResultGapHeader = $ResultGapHeader.Replace("RESULTS_GAP_DESC", "Difference with $PreTestPass")
+$ResultGapHeader = $ResultGapHeader.Replace("RESULTS_GAP_DESC", "$TestPass vs $PreTestPass")
 $finalHTMLString += $ResultGapHeader
 
 # Get the detail information
@@ -643,7 +643,7 @@ foreach ($_ in $gapDetails) {
 }
 $finalHTMLString += $htmlEnd
 
-$htmlSubHeader = $htmlSubHeader.Replace("DETAILS", "Details of $TestPass Test Pass")
+$htmlSubHeader = $htmlSubHeader.Replace("DETAILS", "Details of $TestPass")
 $finalHTMLString += $htmlSubHeader
 foreach ($_ in $details) {
     $count = $_.Count

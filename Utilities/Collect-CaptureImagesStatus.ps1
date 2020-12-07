@@ -21,7 +21,6 @@ Import-Module $commonModulePath
 $StatusNotStarted = "NotStarted"
 $StatusRunning = "Running"
 $StatusPassed = "Passed"
-$StatusFailed = "Failed"
 
 function Get-PassedCount($connection) {
     $sql = "
@@ -31,29 +30,6 @@ function Get-PassedCount($connection) {
     $results = QuerySql $connection $sql
     $count = ($results[0][0]) -as [int]
     Write-LogInfo "The passed count is $count"
-
-    return $count
-}
-
-function Get-FailedCount($connection) {
-    $sql = "
-    select Count(ARMImage) from CaptureImageInfo
-    where Status='$StatusFailed'"
-
-    $results = QuerySql $connection $sql
-    $count = ($results[0][0]) -as [int]
-    Write-LogInfo "The failed count is $count"
-
-    return $count
-}
-
-function Get-TotalCount($connection) {
-    $sql = "
-    select Count(ARMImage) from CaptureImageInfo"
-
-    $results = QuerySql $connection $sql
-    $count = ($results[0][0]) -as [int]
-    Write-LogInfo "The total count is $count"
 
     return $count
 }
@@ -114,11 +90,9 @@ try {
     $connection.ConnectionString = $connectionString
     $connection.Open()
 
-    $totalCount = Get-TotalCount $connection
     $notStartedCount = Get-NotStartedCount $connection
     $runningCount = Get-RunningCount $connection
     $passedCount = Get-PassedCount $connection
-    $failedCount = Get-FailedCount $connection
 } catch {
     $line = $_.InvocationInfo.ScriptLineNumber
     $script_name = ($_.InvocationInfo.ScriptName).Replace($PWD,".")
@@ -153,22 +127,18 @@ $htmlHeader = '
 <h2>&bull;&nbsp;STATUS_TITLE</h2>
 <table border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse" class="tm">
   <tr>
-    <td class="tm-7k3a">Total Images Count</td>
-    <td class="tm-7k3a">Not Started</td>
-    <td class="tm-7k3a">Running</td>
-    <td class="tm-7k3a">Passed</td>
-    <td class="tm-7k3a">Failed</td>
+    <td class="tm-7k3a">Pending</td>
+    <td class="tm-7k3a">Capturing</td>
+    <td class="tm-7k3a">Captured</td>
   </tr>
 '
 
 $htmlNodeRed =
 '
   <tr>
-    <td class="tm-yw4l">TOTAL</td>
-    <td class="tm-yw4l">NOTSTARTED</td>
-    <td class="tm-yw4l">RUNNING</td>
-    <td class="tm-yw4l">PASSED</td>
-    <td class="tm-yw4l">FAILED</td>
+    <td class="tm-yw4l">PENDING</td>
+    <td class="tm-yw4l">CAPTURING</td>
+    <td class="tm-yw4l">CAPTURED</td>
   </tr>
 '
 
@@ -184,18 +154,16 @@ if (!(Test-Path -Path ".\AzureFleetSmokeTestStatus.html")) {
 
 #region Get Title...
 
-$htmlHeader = $htmlHeader.Replace("STATUS_TITLE","$Title")
+$htmlHeader = $htmlHeader.Replace("STATUS_TITLE","All Azure Marketplace Images Captured until now:")
 #endregion
 
 #region build HTML Page
 $finalHTMLString = $htmlHeader
 
 $currentNode = $htmlNodeRed
-$currentNode = $currentNode.Replace("TOTAL","$totalCount")
-$currentNode = $currentNode.Replace("NOTSTARTED","$notStartedCount")
-$currentNode = $currentNode.Replace("RUNNING","$runningCount")
-$currentNode = $currentNode.Replace("PASSED","$passedCount")
-$currentNode = $currentNode.Replace("FAILED","$failedCount")
+$currentNode = $currentNode.Replace("PENDING","$notStartedCount")
+$currentNode = $currentNode.Replace("CAPTURING","$runningCount")
+$currentNode = $currentNode.Replace("CAPTURED","$passedCount")
 $finalHTMLString += $currentNode
 $finalHTMLString += $htmlEnd
 
