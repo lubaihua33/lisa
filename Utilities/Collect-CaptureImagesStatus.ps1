@@ -154,7 +154,7 @@ if (!(Test-Path -Path ".\AzureFleetSmokeTestStatus.html")) {
 
 #region Get Title...
 
-$htmlHeader = $htmlHeader.Replace("STATUS_TITLE","All Azure Marketplace Images Captured until now:")
+$htmlHeader = $htmlHeader.Replace("STATUS_TITLE","All Azure Marketplace Images Captured until now")
 #endregion
 
 #region build HTML Page
