@@ -283,7 +283,7 @@ function Get-Details ($connection, $testPassId) {
     FailureGroup as (
         select count(a.Id) as Count, a.STATUS as Status, a.FailureId
         from LatestResult a
-        where a.FailureId!='-1' or (a.FailureId='-1' and a.Status='FAILED')
+        where a.FailureId!='-1' or (a.FailureId='-1' and Message <> '')
         group by a.STATUS, a.FailureId
     ),
     FailureSummary as(
@@ -293,7 +293,7 @@ function Get-Details ($connection, $testPassId) {
     FailureSample as (
         select max(id) id, FailureId
         from LatestResult a
-        where (a.Status='FAILED' and a.FailureId='-1') or a.FailureId!='-1'
+        where a.FailureId!='-1' or (a.FailureId='-1' and Message <> '')
         group by FailureId
     )
     select a.*, b.Id as SampleId, b.Image as SampleImage, b.Message as SampleMessage
@@ -428,9 +428,16 @@ try {
         $statusSummaryList += @($statusSummary)
     }
 
+    $unknowFailuresCount = 0
+    $unknowWarningsCound = 0
     $details = Get-Details $connection $latestTestPassId
-    foreach ($_ in $details) {if ($_.FailureId -eq '-1') {$unknowFailuresCount = $_.Count; break}}
-    if (!$unknowFailuresCount) {$unknowFailuresCount = 0}
+    foreach ($_ in $details) {
+        if ($_.FailureId -eq '-1') {
+            if ($_.Status -eq 'FAILED') { $unknowFailuresCount = $_.Count; }
+            if ($_.Status -eq 'PASSED') { $unknowWarningsCound = $_.Count; }
+        }
+    }
+
     $newImagesCount = Get-NewImagesCount $connection $latestTestPassId $preTestPassId
     $notAvailableCount = Get-NotAvailableCount $connection $latestTestPassId $preTestPassId
     $sameImagesCount = Get-SameImagsCount $connection $latestTestPassId $preTestPassId
@@ -521,6 +528,10 @@ $imagesCountGapNode ='
   <tr>
     <td class="tm-7k3a">Unknown Failures</td>
     <td class="tm-yw4l">UNKNOWNFAILURES</td>
+  </tr>
+  <tr>
+    <td class="tm-7k3a">Unknown Warnings</td>
+    <td class="tm-yw4l">UNKNOWNWARNINGS</td>
   </tr>
 '
 
@@ -618,6 +629,7 @@ $currentNode = $currentNode.Replace("SAME","$sameImagesCount")
 $currentNode = $currentNode.Replace("FAILEDPASSED","$newPassedOldFailedCount")
 $currentNode = $currentNode.Replace("PASSEDFAILED","$newFailedOldPassedCount")
 $currentNode = $currentNode.Replace("UNKNOWNFAILURES","$unknowFailuresCount")
+$currentNode = $currentNode.Replace("UNKNOWNWARNINGS","$unknowWarningsCound")
 $finalHTMLString += $currentNode
 $finalHTMLString += $htmlEnd
 
