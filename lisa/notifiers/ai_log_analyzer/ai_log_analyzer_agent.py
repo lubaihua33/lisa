@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 import logging
 import os
 from typing import List
@@ -20,6 +21,28 @@ from semantic_kernel.connectors.ai.open_ai.prompt_execution_settings.azure_chat_
 
 load_dotenv()
 
+working_directory = os.path.dirname(os.path.realpath(__file__))
+
+def setup_debug_logging():
+    debug_dir = os.path.join(working_directory,
+        "resources",
+        "tracing",
+    )
+    os.makedirs(debug_dir, exist_ok=True)
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    tracing_filepath = os.path.join(debug_dir, f"debug_{timestamp}.log")
+    setup_logging()
+    logging.getLogger().setLevel(logging.DEBUG)
+
+    # Create file handler and format each log message
+    file_handler = logging.FileHandler(tracing_filepath)
+    file_handler.setLevel(logging.DEBUG)
+    formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    file_handler.setFormatter(formatter)
+    
+    logging.getLogger().addHandler(file_handler)
+
+
 class FileSearchPlugin:
     @kernel_function(
         name="search_error",
@@ -31,11 +54,11 @@ class FileSearchPlugin:
         The model will recognize whether a message is an error message or not, and pass the value as an argument to the function.
         """
         paths = []
-        base_directory = os.path.join(os.path.dirname(os.path.realpath(__file__)),
+        test_logs_directory = os.path.join(working_directory,
             "test_logs",
         )
         
-        for root, _, files in os.walk(base_directory):
+        for root, _, files in os.walk(test_logs_directory):
             # Ignore directories that end with serial_log
             if not root.lower().endswith("serial_log"):
                 for file in files:
@@ -71,10 +94,11 @@ async def main():
         FileSearchPlugin(),
         plugin_name="Search",
     )
-
-    # Enable tracing of the model
-    setup_logging()
-    logging.getLogger().setLevel(logging.INFO)
+    
+    setup_debug_logging()
+    # setup_logging()
+    # logging.getLogger().setLevel(logging.DEBUG)
+    
 
     # Enable planning -- the model decides which function to use, if any
     execution_settings = AzureChatPromptExecutionSettings()
