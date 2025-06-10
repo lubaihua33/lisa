@@ -1,13 +1,16 @@
 import asyncio
+import logging
 import os
 from typing import List
 
 from dotenv import load_dotenv
 from semantic_kernel import Kernel
+from semantic_kernel.utils.logging import setup_logging
 from semantic_kernel.functions import kernel_function
 from semantic_kernel.connectors.memory.in_memory import InMemoryVectorStore
+from semantic_kernel.contents.utils.author_role import AuthorRole
 from semantic_kernel.connectors.ai.function_choice_behavior import FunctionChoiceBehavior
-from semantic_kernel.contents.chat_history import ChatHistory
+from semantic_kernel.contents.chat_history import ChatHistory, ChatMessageContent
 from semantic_kernel.connectors.ai.open_ai import AzureOpenAISettings, AzureChatCompletion, OpenAITextEmbedding
 
 # This enables planning
@@ -64,15 +67,19 @@ async def main():
     
     kernel.add_service(chat_completion)
 
-    # Add plugin to kernel
     kernel.add_plugin(
         FileSearchPlugin(),
         plugin_name="Search",
     )
 
+    # Enable tracing of the model
+    setup_logging()
+    logging.getLogger().setLevel(logging.INFO)
+
     # Enable planning -- the model decides which function to use, if any
     execution_settings = AzureChatPromptExecutionSettings()
     execution_settings.function_choice_behavior = FunctionChoiceBehavior.Auto()
+
 
     # Create a history of the conversation
     history = ChatHistory()
@@ -81,6 +88,10 @@ async def main():
     history.add_system_message("You are an AI assistant that helps users find error messages in log files."
                                "If the user provides an error message, call the `search_error` function with it."
     )
+
+    assistant_prompt = "Hi! How may I assist you? Type 'exit' to end the chat."
+    print(f"Assistant > {assistant_prompt}")
+    history.add_assistant_message(assistant_prompt)
 
     user_input = None
     while True:
@@ -98,9 +109,10 @@ async def main():
             kernel=kernel,
         )
 
-        print("Assistant > " + str(result))
-
+        print("\nAssistant > " + str(result))
         history.add_message(result)
+
+        print("-----------------------\n")
 
     ## 2nd iteration
     # embedding_gen = OpenAITextEmbedding(
