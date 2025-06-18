@@ -18,11 +18,15 @@ from semantic_kernel.connectors.ai.open_ai import AzureOpenAISettings, AzureChat
 from semantic_kernel.connectors.ai.open_ai.prompt_execution_settings.azure_chat_prompt_execution_settings import (
     AzureChatPromptExecutionSettings,
 )
+import semantic_kernel.contents.chat_history
 
+
+## Load environment variables from .env file
 load_dotenv()
 
-working_directory = os.path.dirname(os.path.realpath(__file__))
 
+## Helper functions
+working_directory = os.path.dirname(os.path.realpath(__file__))
 def setup_debug_logging():
     debug_dir = os.path.join(working_directory,
         "resources",
@@ -49,8 +53,8 @@ def setup_debug_logging():
 def map_log_path_to_local(log_path: str, local_root: str, anchor_dir: str="lisa") -> str:
     """
     Maps a file path in the traceback to a local file system path based on the provided local root directory.
-    The log_path is expected to be relative to the anchor_dir, which is typically the 'lisa' directory. Skips the mapping 
-    if the log_path does not contain the anchor_dir.
+    log_path is expected to be relative to anchor_dir, which is typically the 'lisa' directory. 
+    Skips the mapping if the log_path does not contain anchor_dir.
     """
     norm_log_path = os.path.normpath(log_path)
     norm_local_root = os.path.normpath(local_root)
@@ -59,14 +63,16 @@ def map_log_path_to_local(log_path: str, local_root: str, anchor_dir: str="lisa"
     if anchor_dir in parts:
         # Find the index of the anchor directory
         anchor_index = parts.index(anchor_dir)
-        relative_path = os.path.join(*parts[anchor_index + 1:])  # Get the path after the anchor directory
+        # Join all parts after the anchor directory
+        relative_path = os.path.join(*parts[anchor_index + 1:])
+        # Join with local root
         local = os.path.join(norm_local_root, relative_path)
         return os.path.normpath(local)
     else:
         return ""
 
 
-
+## Agent plugin definitions
 class FileSearchPlugin:
     @kernel_function(
         name="search_error",
@@ -76,8 +82,7 @@ class FileSearchPlugin:
     def search_error(self, error_message: str, input_path: str) -> List[str]:
         """
         The model will recognize the error as error_message, and path as path, then pass the values as arguments to the function.
-        """ 
-        # print(f"\nSearching for error message: {error_message} in path: {input_path}")
+        """
         location = []
         norm_path = os.path.normpath(input_path)
 
@@ -99,9 +104,8 @@ class FileSearchPlugin:
     def extract_segment(self, line_number: int, input_path: str, offset: int) -> str:
         """
         Extracts the lines of the relevant segment from the file (log or code) starting from the line number of the error message.
-        The offset parameter allows the model to capture several lines before the error line to get the full context.
+        offset allows the model to capture several lines before the error line to get the full context.
         """
-        # print(f"\nExtracting error trace from line {line_number} in path: {input_path} with offset: {offset}")
         traceback = []
         norm_path = os.path.normpath(input_path)
 
@@ -122,10 +126,9 @@ class FileSearchPlugin:
     )
     def list_files(self, traceback: str, code_path: str) -> List[str]:
         """
-        Parses the traceback for file paths and returns a list of files that are relevant to the error.
-        The code_path parameter is used to locate the correct file paths locally.
+        Parses traceback for file paths and returns a list of files that are relevant to the error.
+        code_path is used to locate the correct file paths locally.
         """
-        # print(f"\nListing files from traceback: {traceback}\n with code path: {code_path}")
         files = []
 
         # Split the traceback into lines and look for file paths
@@ -137,9 +140,13 @@ class FileSearchPlugin:
                 # print(f"Found file path: {local_path}, mapped to local path: {local_path}")
                 if os.path.exists(local_path):
                     files.append(local_path)
-        print(f"\nFiles found in traceback: {files}")
+        print(f"\nFiles found in traceback: {list(dict.fromkeys(files))}")
+
+        print("\nPlease wait...")
         return files
 
+
+## Path input structure
 @dataclass
 class InputPath:
     # Represents a file type for the path (code, log, etc.)
@@ -147,15 +154,16 @@ class InputPath:
     # Represents the path to the file
     value: str
 
+
 class LogAgent:
     def __init__(self, url: str, key: str, **kwargs):
         self.kernel = Kernel()
-
+    
         # Add Azure OpenAI chat completion service for user-agent interaction
         self.chat_completion = AzureChatCompletion(
             deployment_name="gpt-4o",
-            api_key=os.getenv("AZURE_OPENAI_API_KEY"),
-            base_url=os.getenv("AZURE_OPENAI_ENDPOINT"),
+            api_key=key,
+            base_url=url,
         )
         self.kernel.add_service(self.chat_completion)
         self.kernel.add_plugin(
@@ -170,18 +178,16 @@ class LogAgent:
         self.execution_settings.function_choice_behavior = FunctionChoiceBehavior.Auto()
     
     async def analyze(self, error_message: str, paths: List[InputPath]) -> str:
-        # Create a history of the conversation
+    # Create a history of the conversation
         self.history = ChatHistory()
+
+        # Load system message from file
+        system_prompt_path = os.path.join(working_directory, "system_prompt.txt")
+        with open(system_prompt_path, 'r') as f:
+            system_message = f.read().strip()
+        
         # Guide the model -- add more context as functions are added
-        self.history.add_system_message(
-            "You are an AI assistant that helps users analyze error messages from LISA logs. Your tasks include:" \
-            "1. Searching for the error message in the provided log files when the user provides one." \
-            "2. Extracting the traceback or relevant code segment from the log file, considering that the traceback may start several lines before the error line." \
-            "3. Listing the files that are relevant to the error based on the traceback, relative to the local machine." \
-            "4. Analyzing the relevant code segment from the file, starting from the most recent file in the traceback." \
-            "5. Providing a summary of the error, the relevant code segment, and suggestions to troubleshoot the issue." \
-            "You will use the provided log files and code paths to perform these tasks." \
-        )
+        self.history.add_system_message(system_message)
 
         assistant_message = "The following files will be used for analysis:\n"
         for path in paths:
@@ -193,19 +199,21 @@ class LogAgent:
 
         print("The agent is analyzing the error and gathering information. Please wait...")
 
-        # Get response from the AI -- which will decide which function to call from "settings"
+        # Wait for a response from the model
         result = await self.chat_completion.get_chat_message_content(
             chat_history=self.history,
             settings=self.execution_settings,
             kernel=self.kernel,
         )
+
         print("\nAssistant > " + str(result))
         self.history.add_message(result)
+
         print("-----------------------\n")
 
 
 async def main():
-    print("AI agent is starting up...")
+    print("The agent is starting up...")
 
     agent = LogAgent(
         url=os.getenv("AZURE_OPENAI_ENDPOINT"),
@@ -215,9 +223,9 @@ async def main():
     print("The agent is ready!")
 
     await agent.analyze(
-        error_message="AssertionError: [nvme devices count should be equal to [vCPU/8].] Expected <['/dev/nvme1n1', '/dev/nvme2n1', '/dev/nvme3n1', '/dev/nvme4n1']> to be of length <16>, but was <4>.",
+        error_message="lisa.util.LisaException: OSProvisioningTimedOut: KernelPanicException: provision found panic in serial log. You can check the panic details from the serial console log. Please download the test logs and retrieve the serial_log from 'environments' directory, or you can ask support. Detected Panic phrases: ['[    3.100034] Kernel panic - not syncing: Fatal exception in interrupt",
         paths=[
-            InputPath(type="log", value="C:\\Users\\t-linm\\Downloads\\log_analyzer_20250603\\log_analyzer_20250603\\20250603-163353-041-verify_nvme_basic\\20250603-163353-041-verify_nvme_basic.log"),
+            InputPath(type="log", value="C:\\Users\\t-linm\\Downloads\\log_analyzer_20250603\\log_analyzer_20250603\\20250603-173555-726-perf_dpdk_l3fwd_ntttcp_tcp\\20250603-173555-726-perf_dpdk_l3fwd_ntttcp_tcp.log"),
             InputPath(type="code", value="C:/Users/t-linm/Documents/lisa-fork"),
         ]
     )
