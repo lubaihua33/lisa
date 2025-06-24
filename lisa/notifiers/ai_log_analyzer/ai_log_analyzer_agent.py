@@ -80,10 +80,7 @@ class ExitCodes:
 
 class AnalysisLimits:
     """Configurable limits for analysis output"""
-    MAX_CRITICAL_ENTRIES = 5
     MAX_ERROR_ENTRIES = 10
-    MAX_WARNING_ENTRIES = 5
-    MAX_FAILED_COMMANDS = 10
     MAX_RECENT_COMMANDS = 25
 
 ## Log entry structure
@@ -252,26 +249,45 @@ def parse_log_entry(log_entry: str, log_line: int) -> dict:
 class LisaErrorAnalyzerPlugin:
     @kernel_function(
         name="search_error",
-        description="Searches log file for a specific error message " \
-        "given by the user and returns the file path, line number, and line content.",
+        description="Searches for a specific error message in the log files within the configured log directory " \
+        "and once found, returns the file path and line number associated with the error message in a structured format.",
     )
-    def search_error(self, error_message: str) -> str:
+    def search_error(self, error_message: str, log_folder_path: str) -> str:
         """
-        Searches for error message in log files within the specified directory path.
+        Searches for error message in log files within the specified log_folder_path.
         Returns the file path, line number, and line content that contains the error message.
         """
-        test_logs_directory = os.path.join(working_directory, "test_logs")
+        norm_log_folder_path = os.path.normpath(log_folder_path)
 
+        if not os.path.exists(norm_log_folder_path):
+            logging.error(f"Log folder path does not exist: {norm_log_folder_path}")
+            return ""
+
+
+        # # Include line number of error_message, and metadata about the ERROR log entry.
+        # error_context = []
+
+        logging.debug(f"Searching for error message: {error_message} in folder: {norm_log_folder_path}")
         # Search through all log files in the directory
-        for root, _, files in os.walk(test_logs_directory):
+        for root, _, files in os.walk(norm_log_folder_path):
             for file in files:
                 if file.endswith('.log'):
                     file_path = os.path.join(root, file)
                     try:
                         with open(file_path, 'r') as f:
                             for i, line in enumerate(f, start=1):
+                                # parsed_line = parse_log_entry(line, i)
+                                # if parsed_line.get('is_error', False):
+                                #     # Found line with ERROR log level
+                                #     error_context.append(parsed_line)
                                 if error_message in line:
-                                    return f"{file_path}|{i}|{line.rstrip()}"  # Return file path, line number, and line content
+                                    return f"{file_path} (line {i}): {line.rstrip()}"
+                                    # error_context.append({
+                                    #     "file_path": file_path,
+                                    #     "line_number": i,
+                                    #     "line_content": line.rstrip()
+                                    # })
+
                     except FileNotFoundError:
                         continue  # Skip if file is not found
                     except Exception as e:
@@ -284,7 +300,7 @@ class LisaErrorAnalyzerPlugin:
         name="extract_segment",
         description="Extracts the call trace or relevant code segment from a file (log or code) by locating the section that contains the call trace" \
         " or error context associated with a given error message. Returns a JSON object containing the line numbers in the log and the extracted segment. " \
-        "The relevant segment may start several lines before the error line, so use an offset (e.g. 10-20 lines before the error line) to capture the full content." \
+        "The relevant segment may start several lines before the error line, so use an offset (e.g. 20-30 lines before the error line) to capture the full content." \
         "For the call trace in the log, capture the line number corresponding to the ERROR-level log entry.",
     )
     def extract_segment(self, line_number: int, input_path: str, offset: int) -> str:
@@ -339,7 +355,7 @@ class LisaErrorAnalyzerPlugin:
     )
     def parse_logs(self, file_path: str) -> List[dict]:
         """
-        Parses the log entries into structured LogEntry objects up until the error log entry.
+        Parses the log entries into structured LogEntry objects up until the error log entry. Only parse the last MAX_RECENT_COMMANDS entries of the same thread.
         input_path is the path to the log file to be parsed.
         """
         parsed_entries = []
@@ -422,7 +438,7 @@ class LogAgent:
         self.history = ChatHistory()
 
         # Load system message from file
-        system_prompt_path = os.path.join(working_directory, "system_prompt_copy.txt")
+        system_prompt_path = os.path.join(working_directory, "system_prompt.txt")
         with open(system_prompt_path, 'r') as f:
             system_message = f.read().strip()
         
@@ -434,7 +450,7 @@ class LogAgent:
             assistant_message += f"- {path.type}: {path.value}\n"
         self.history.add_assistant_message(assistant_message)        # Add the error message as a user message so the model knows what to search for
 
-        self.history.add_user_message(f"Please search for this error: {error_message}")
+        self.history.add_user_message(f"Please search for this error: {error_message} in the logs. Troubleshoot the error, identify the root causes, and suggest the best course of action to resolve the issue. " )
 
         print("The agent is analyzing the error and gathering information. Please wait...")
 
@@ -462,9 +478,9 @@ async def main():
     print("The agent is ready!")
 
     await agent.analyze(
-        error_message="lisa.util.LisaException: OSProvisioningTimedOut: KernelPanicException: provision found panic in serial log.",
+        error_message="AssertionError: Expected <enable_extension> to raise <HttpResponseError> when called with ().",
         paths=[
-            InputPath(type="log", value="C:\\Users\\t-linm\\Downloads\\log_analyzer_20250603\\log_analyzer_20250603\\20250603-173555-726-perf_dpdk_l3fwd_ntttcp_tcp"),
+            InputPath(type="log", value="C:\\Users\\t-linm\\Downloads\\log_analyzer_20250603\\log_analyzer_20250603\\20250603-175005-839-verify_private_script_without_sas_run_failed"),
             InputPath(type="code", value="C:/Users/t-linm/Documents/lisa-fork"),
         ]
     )
