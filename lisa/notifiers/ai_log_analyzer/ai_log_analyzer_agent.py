@@ -4,6 +4,7 @@ import logging
 import re
 import os
 import aiohttp
+import json
 from bs4 import BeautifulSoup
 from enum import Enum
 
@@ -164,6 +165,40 @@ class LogEntry:
 ## Helper functions
 working_directory = os.path.dirname(os.path.realpath(__file__))
 
+def load_test_data_by_index(index: int) -> dict:
+    """
+    Load test data from inputs.json file by index.
+    
+    Args:
+        index: The index of the test case in the JSON array
+        
+    Returns:
+        dict: Test data containing path, error_message, and outcome
+        
+    Raises:
+        FileNotFoundError: If inputs.json file is not found
+        IndexError: If index is out of range
+        ValueError: If JSON format is invalid
+    """
+    json_path = os.path.join(working_directory, "test_logs", "log_analyzer_20250603", "inputs.json")
+    
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            test_data = json.load(f)
+        
+        if not isinstance(test_data, list):
+            raise ValueError("JSON file should contain an array of test cases")
+        
+        if index < 0 or index >= len(test_data):
+            raise IndexError(f"Index {index} is out of range. Available indices: 0-{len(test_data)-1}")
+        
+        return test_data[index]
+    
+    except FileNotFoundError:
+        raise FileNotFoundError(f"inputs.json file not found at {json_path}")
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON format in inputs.json: {e}")
+
 def setup_debug_logging():
     debug_dir = os.path.join(working_directory,
         "resources",
@@ -186,6 +221,19 @@ def setup_debug_logging():
         logging.getLogger().removeHandler(handler)
     
     logging.getLogger().addHandler(file_handler)
+    
+    # # Enable detailed logging for Semantic Kernel components
+    # logging.getLogger("semantic_kernel").setLevel(logging.DEBUG)
+    # logging.getLogger("semantic_kernel.connectors").setLevel(logging.DEBUG)
+    # logging.getLogger("semantic_kernel.connectors.ai").setLevel(logging.DEBUG)
+    # logging.getLogger("semantic_kernel.connectors.ai.open_ai").setLevel(logging.DEBUG)
+    
+    # # Enable HTTP request logging to capture all LLM requests
+    # logging.getLogger("httpcore").setLevel(logging.DEBUG)
+    # logging.getLogger("httpx").setLevel(logging.DEBUG)
+    # logging.getLogger("openai").setLevel(logging.DEBUG)
+    
+    # print(f"Debug logging enabled. Log file: {tracing_filepath}")
 
 
 def map_log_path_to_local(log_path: str, local_root: str, anchor_dir: str="lisa") -> str:
@@ -252,20 +300,19 @@ class LisaErrorAnalyzerPlugin:
         description="Searches for a specific error message in the log files within the configured log directory " \
         "and once found, returns the file path and line number associated with the error message in a structured format.",
     )
-    def search_error(self, error_message: str, log_folder_path: str) -> str:
+    def search_error(self, error_message: str, log_folder_path: str) -> List[dict]:
         """
-        Searches for error message in log files within the specified log_folder_path.
-        Returns the file path, line number, and line content that contains the error message.
+        Searches for a specific error message in the log files log_folder_path.
+        Return two types of log entries of type LogEntry: the ERROR log entry, and the entry that contains the error message.
         """
         norm_log_folder_path = os.path.normpath(log_folder_path)
 
         if not os.path.exists(norm_log_folder_path):
             logging.error(f"Log folder path does not exist: {norm_log_folder_path}")
-            return ""
+            return []
 
-
-        # # Include line number of error_message, and metadata about the ERROR log entry.
-        # error_context = []
+        # Include line number of error_message, and metadata about the ERROR log entry.
+        error_context = []
 
         logging.debug(f"Searching for error message: {error_message} in folder: {norm_log_folder_path}")
         # Search through all log files in the directory
@@ -276,17 +323,16 @@ class LisaErrorAnalyzerPlugin:
                     try:
                         with open(file_path, 'r') as f:
                             for i, line in enumerate(f, start=1):
-                                # parsed_line = parse_log_entry(line, i)
-                                # if parsed_line.get('is_error', False):
-                                #     # Found line with ERROR log level
-                                #     error_context.append(parsed_line)
-                                if error_message in line:
-                                    return f"{file_path} (line {i}): {line.rstrip()}"
-                                    # error_context.append({
-                                    #     "file_path": file_path,
-                                    #     "line_number": i,
-                                    #     "line_content": line.rstrip()
-                                    # })
+                                parsed_line = parse_log_entry(line, i)
+
+                                # Record the line with ERROR log entry
+                                if parsed_line.get('is_error', False):
+                                    # Found line with ERROR log level
+                                    error_context.append(parsed_line)
+                                
+                                # Record the line if it contains the error message
+                                if parsed_line.get('raw_line') in line:
+                                    error_context.append(parsed_line)
 
                     except FileNotFoundError:
                         continue  # Skip if file is not found
@@ -294,7 +340,7 @@ class LisaErrorAnalyzerPlugin:
                         # print(f"Error reading file {file_path}: {e}")
                         print("Skipping...")
                         continue
-        return ""
+        return error_context
     
     @kernel_function(
         name="extract_segment",
@@ -348,59 +394,60 @@ class LisaErrorAnalyzerPlugin:
         print("\nThe agent is gathering information. Please wait...")
         return files    
     
-    @kernel_function(
-        name="parse_logs",
-        description="Parses the log file content into structured log entries up until the ERROR log entry. " \
-        "Extracts: timestamp, thread number, log level, component, and message."
-    )
-    def parse_logs(self, file_path: str) -> List[dict]:
-        """
-        Parses the log entries into structured LogEntry objects up until the error log entry. Only parse the last MAX_RECENT_COMMANDS entries of the same thread.
-        input_path is the path to the log file to be parsed.
-        """
-        parsed_entries = []
-        norm_path = os.path.normpath(file_path)
-        logging.debug(f"Parsing log file: {norm_path}")
+    # @kernel_function(
+    #     name="parse_logs",
+    #     description="Parses the log file content into structured log entries up until the ERROR log entry. Only limits parsing of the last MAX_RECENT_COMMANDS" \
+    #     "entries of the same thread as the ERROR entry to prevent excessive memory usage. " \
+    #     "Extracts: timestamp, thread number, log level, component, and message."
+    # )
+    # def parse_logs(self, file_path: str) -> List[dict]:
+    #     """
+    #     Parses the log entries into structured LogEntry objects up until the error log entry. Only parse the last MAX_RECENT_COMMANDS entries of the same thread.
+    #     input_path is the path to the log file to be parsed.
+    #     """
+    #     parsed_entries = []
+    #     norm_path = os.path.normpath(file_path)
+    #     logging.debug(f"Parsing log file: {norm_path}")
 
-        if os.path.exists(norm_path):
-            with open(norm_path, 'r') as f:
-                for i, line in enumerate(f, start=1):
-                    # Parse each line into a LogEntry object
-                    entry = parse_log_entry(line, i)
-                    if entry:
-                        parsed_entries.append(entry)
-                        logging.debug(f"Parsed entry: {i} - {entry['raw_line']}")
-                        if entry.get('is_error', False):
-                            break  # Stop parsing if an error entry is found
-        return parsed_entries
+    #     if os.path.exists(norm_path):
+    #         with open(norm_path, 'r') as f:
+    #             for i, line in enumerate(f, start=1):
+    #                 # Parse each line into a LogEntry object
+    #                 entry = parse_log_entry(line, i)
+    #                 if entry:
+    #                     parsed_entries.append(entry)
+    #                     logging.debug(f"Parsed entry: {i} - {entry['raw_line']}")
+    #                     if entry.get('is_error', False):
+    #                         break  # Stop parsing if an error entry is found
+    #     return parsed_entries
     
-    @kernel_function(
-        name="filter_by_thread_id",
-        description="Parses the log entries produced by parse_logs() and filters them by thread number."
-        "Limit log entries to MAX_RECENT_COMMANDS." \
-    )
-    def filter_by_thread_id(self, error_thread_id: str, parsed_entries: List[dict]) -> List[dict]:
-        """
-        Filters the parsed log entries by thread number.
+    # @kernel_function(
+    #     name="filter_by_thread_id",
+    #     description="Parses the log entries produced by parse_logs() and filters them by thread number."
+    #     "Limit log entries to MAX_RECENT_COMMANDS." \
+    # )
+    # def filter_by_thread_id(self, error_thread_id: str, parsed_entries: List[dict]) -> List[dict]:
+    #     """
+    #     Filters the parsed log entries by thread number.
         
-        Args:
-            thread_number: The thread number to filter by
-            parsed_entries: List of all parsed LogEntry objects
+    #     Args:
+    #         thread_number: The thread number to filter by
+    #         parsed_entries: List of all parsed LogEntry objects
             
-        Returns:
-            List of LogEntry objects that match the specified thread number
-        """
-        if not error_thread_id:
-            return []
+    #     Returns:
+    #         List of LogEntry objects that match the specified thread number
+    #     """
+    #     if not error_thread_id:
+    #         return []
 
-        # Filter entries by thread number
-        filtered_entries = [
-            entry for entry in parsed_entries 
-            if entry.get('thread_number') == error_thread_id
-        ]
+    #     # Filter entries by thread number
+    #     filtered_entries = [
+    #         entry for entry in parsed_entries 
+    #         if entry.get('thread_number') == error_thread_id
+    #     ]
 
-        # Limit to MAX_RECENT_COMMANDS
-        return filtered_entries[-AnalysisLimits.MAX_RECENT_COMMANDS:]
+    #     # Limit to MAX_RECENT_COMMANDS
+    #     return filtered_entries[-AnalysisLimits.MAX_RECENT_COMMANDS:]
 
         
 
@@ -477,13 +524,28 @@ async def main():
 
     print("The agent is ready!")
 
-    await agent.analyze(
-        error_message="AssertionError: Expected <enable_extension> to raise <HttpResponseError> when called with ().",
-        paths=[
-            InputPath(type="log", value="C:\\Users\\t-linm\\Downloads\\log_analyzer_20250603\\log_analyzer_20250603\\20250603-175005-839-verify_private_script_without_sas_run_failed"),
-            InputPath(type="code", value="C:/Users/t-linm/Documents/lisa-fork"),
-        ]
-    )
+    # Load test data by index - change this index to test different cases
+    test_index = 10  # Change this to test different error cases (0-11 available)
+    
+    try:
+        test_data = load_test_data_by_index(test_index)
+        print(f"Loading test case {test_index}: {test_data['path']}")
+        
+        # Extract the log folder path from the test path
+        log_base_path = "C:\\Users\\t-linm\\Downloads\\log_analyzer_20250603\\log_analyzer_20250603"
+        log_folder_path = os.path.join(log_base_path, test_data['path'])
+        
+        await agent.analyze(
+            error_message=test_data['error_message'],
+            paths=[
+                InputPath(type="log", value=log_folder_path),
+                InputPath(type="code", value="C:/Users/t-linm/Documents/lisa-fork"),
+            ]
+        )
+        
+    except (FileNotFoundError, IndexError, ValueError) as e:
+        print(f"Error loading test data: {e}")
+        return
 
 
 if __name__ == "__main__":
