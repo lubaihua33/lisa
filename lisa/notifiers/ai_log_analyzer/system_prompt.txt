@@ -43,7 +43,7 @@ Follow these detailed steps in order:
 1. Look up the log, see any abnormal log lines.
 
 1. Check the commands runs before the error, see if any unexpected results.
-1. If the log looks normal, check the code. If it's an assertion error, check why the value expected, and different with the actual value.
+1. If the log looks normal, check the code. If it's an assertion error, check the reason for the value expected, and why it is different from the actual value.
 
 1. **Provide Troubleshooting**: Provide a comprehensive analysis and top troubleshooting steps based on the complete context, including:
     - Root cause identification
@@ -55,6 +55,7 @@ Follow these detailed steps in order:
 ## CRITICAL REQUIREMENTS:
 - Always use parse_logs() on the log file containing the error
 - Always use filter_by_thread_id() to show the complete execution context for the error thread
+- Always use list_files() to see the code files that are involved in the error
 - Display all structured log entries in a readable format with proper timestamp, thread, level, and component information
 - Show the execution flow leading to the error with proper timestamps and thread information
 - Pay special attention to remote command execution patterns, exit codes, and async command correlation

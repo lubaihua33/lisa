@@ -15,7 +15,7 @@ from semantic_kernel import Kernel
 from semantic_kernel.utils.logging import setup_logging
 from semantic_kernel.functions import kernel_function
 from semantic_kernel.connectors.memory.in_memory import InMemoryVectorStore
-from semantic_kernel.contents.utils.author_role import AuthorRole
+from semantic_kernel.contents import ChatHistoryTruncationReducer
 from semantic_kernel.connectors.ai.function_choice_behavior import FunctionChoiceBehavior
 from semantic_kernel.contents.chat_history import ChatHistory, ChatMessageContent
 from semantic_kernel.connectors.ai.open_ai import AzureOpenAISettings, AzureChatCompletion, OpenAITextEmbedding
@@ -192,6 +192,7 @@ def load_test_data_by_index(index: int) -> dict:
         if index < 0 or index >= len(test_data):
             raise IndexError(f"Index {index} is out of range. Available indices: 0-{len(test_data)-1}")
         
+        # print(f"test_data: {test_data[index]}")
         return test_data[index]
     
     except FileNotFoundError:
@@ -247,9 +248,7 @@ def map_log_path_to_local(log_path: str, local_root: str, anchor_dir: str="lisa"
 
     parts = norm_log_path.split(os.sep)
     if anchor_dir in parts:
-        # Find the index of the anchor directory
         anchor_index = parts.index(anchor_dir)
-        # Join all parts after the anchor directory
         relative_path = os.path.join(*parts[anchor_index + 1:])
         # Join with local root
         local = os.path.join(norm_local_root, relative_path)
@@ -267,7 +266,11 @@ def parse_log_entry(log_entry: str, log_line: int) -> dict:
         
     Returns:
         LogEntry object with parsed components: timestamp, thread number, log level, component, message.
+        Returns None if the entry doesn't match the expected format.
     """
+    if not log_entry or log_entry.strip() == "":
+        return None
+        
     log_pattern = RegexPatterns.LISA_LOG_PATTERN
     match = re.match(log_pattern, log_entry.strip())
     
@@ -288,9 +291,113 @@ def parse_log_entry(log_entry: str, log_line: int) -> dict:
             cmd_id = cmd_id_match.group(1).strip()
             structured.cmd_id = cmd_id
 
+        print(f"Parsed log entry: {structured.to_dict()}")
         return structured.to_dict()
+    
+    # For error messages that don't match the standard format but contain ERROR/CRITICAL keywords
+    error_keywords = ['ERROR', 'EXCEPTION', 'CRITICAL', 'FATAL', 'PANIC']
+    for keyword in error_keywords:
+        if keyword in log_entry.upper():
+            # Try to extract parts in a best-effort way
+            print(f"Found error keyword {keyword} in non-standard log: {log_entry}")
+            return {
+                'log_level': keyword,
+                'message': log_entry.strip(),
+                'line_number': log_line,
+                'raw_line': log_entry.strip(),
+                'is_error': 'ERROR' in keyword.upper() or 'EXCEPTION' in keyword.upper(),
+                'is_critical': 'CRITICAL' in keyword.upper() or 'FATAL' in keyword.upper() or 'PANIC' in keyword.upper(),
+                'is_warning': False
+            }
 
     return None  # Return None if the log entry does not match the expected format
+
+def find_error_and_traceback(file_path: str, error_line: int, context_lines: int = 5) -> dict:
+    """
+    Locates the ERROR log entry and the subsequent traceback.
+    
+    Args:
+        file_path: Path to the log file
+        error_line: Line number where the error message was found
+        context_lines: Number of lines to check before and after the error line
+        
+    Returns:
+        Dictionary with:
+        - error_entry: The full ERROR log entry
+        - error_line: Line number of the ERROR entry
+        - traceback_start: Line number where traceback starts
+        - traceback: Full traceback content
+    """
+    result = {
+        "error_entry": None,
+        "error_line": None,
+        "traceback_start": None,
+        "traceback": []
+    }
+    
+    # Safety checks
+    if not os.path.exists(file_path):
+        return result
+    
+    # Look for ERROR entries and traceback patterns
+    with open(file_path, 'r') as f:
+        # Create a buffer to hold recent lines for context
+        line_buffer = []
+        in_traceback = False
+        traceback_indent = 0
+        
+        # Start checking a few lines before the reported error
+        start_line = max(1, error_line - context_lines)
+        
+        for i, line in enumerate(f, start=1):
+            # Skip lines until we reach our target area
+            if i < start_line:
+                continue
+                
+            # We've gone too far, stop checking
+            if i > error_line + 50:
+                break
+                
+            # Add line to buffer and maintain reasonable buffer size
+            line_buffer.append((i, line.rstrip()))
+            if len(line_buffer) > context_lines * 2:
+                line_buffer.pop(0)
+            
+            # Look for ERROR log entry pattern
+            if "[ERROR]" in line and not result["error_entry"]:
+                result["error_entry"] = line.rstrip()
+                result["error_line"] = i
+            
+            # Look for traceback start patterns after we've seen an ERROR
+            if result["error_entry"] and not in_traceback:
+                if ("Traceback (most recent call last)" in line or 
+                    line.startswith("  File ") or
+                    "Exception: " in line):
+                    result["traceback_start"] = i
+                    in_traceback = True
+                    # If it's an indented line, record the indent level
+                    traceback_indent = len(line) - len(line.lstrip())
+                    result["traceback"].append(line.rstrip())
+                    continue
+            
+            # Collect traceback lines
+            if in_traceback:
+                # Check if we're still in the traceback by indent level or common patterns
+                if (line.startswith(" " * traceback_indent) or
+                   "File " in line or 
+                   "line " in line or
+                   "Exception: " in line or
+                   "Error: " in line):
+                    result["traceback"].append(line.rstrip())
+                else:
+                    # Empty line or different indent might still be part of traceback
+                    if line.strip() == "" or "^" in line:
+                        result["traceback"].append(line.rstrip())
+                    else:
+                        # We've exited the traceback
+                        break
+    
+    return result
 
 
 ## Agent plugin definitions
@@ -314,32 +421,73 @@ class LisaErrorAnalyzerPlugin:
         # Include line number of error_message, and metadata about the ERROR log entry.
         error_context = []
 
-        logging.debug(f"Searching for error message: {error_message} in folder: {norm_log_folder_path}")
-        # Search through all log files in the directory
         for root, _, files in os.walk(norm_log_folder_path):
             for file in files:
-                if file.endswith('.log'):
+                if file.endswith(FileExtensions.LOG_EXTENSION):
                     file_path = os.path.join(root, file)
                     try:
                         with open(file_path, 'r') as f:
                             for i, line in enumerate(f, start=1):
-                                parsed_line = parse_log_entry(line, i)
-
-                                # Record the line with ERROR log entry
-                                if parsed_line.get('is_error', False):
-                                    # Found line with ERROR log level
+                                # First check if the error message is in the line
+                                if error_message in line:
+                                    # Parse the line into structured format
+                                    parsed_line = parse_log_entry(line, i)
+                                    
+                                    # If parsing failed, create a basic entry with raw text
+                                    if parsed_line is None:
+                                        parsed_line = {
+                                            'line_number': i,
+                                            'raw_line': line.strip(),
+                                            'file_path': file_path,
+                                            'is_error': True
+                                        }
+                                    else:
+                                        # Add file path to the parsed entry
+                                        parsed_line['file_path'] = file_path
+                                    
+                                    # Add to context
                                     error_context.append(parsed_line)
-                                
-                                # Record the line if it contains the error message
-                                if parsed_line.get('raw_line') in line:
-                                    error_context.append(parsed_line)
-
                     except FileNotFoundError:
                         continue  # Skip if file is not found
                     except Exception as e:
-                        # print(f"Error reading file {file_path}: {e}")
-                        print("Skipping...")
                         continue
+        print(f"Error context found with {len(error_context)} entries")
+        if len(error_context) == 0:
+            print("WARNING: No error context found. The error message may not be present in the logs.")
+            # As a fallback, try searching for partial matches
+            search_terms = error_message.split()
+            if len(search_terms) > 2:  # Only try if we have multiple words
+                print(f"Trying fallback search with key terms: {search_terms[:3]}")
+                # Try searching for the first few terms as a substring
+                partial_search = ' '.join(search_terms[:3])
+                for root, _, files in os.walk(norm_log_folder_path):
+                    for file in files:
+                        if file.endswith(FileExtensions.LOG_EXTENSION):
+                            file_path = os.path.join(root, file)
+                            try:
+                                with open(file_path, 'r') as f:
+                                    for i, line in enumerate(f, start=1):
+                                        if partial_search in line:
+                                            print(f"Found partial match in {file_path} at line {i}")
+                                            # Create basic entry with raw text
+                                            error_context.append({
+                                                'line_number': i,
+                                                'raw_line': line.strip(),
+                                                'file_path': file_path,
+                                                'is_partial_match': True
+                                            })
+                                            break  # Just find the first occurrence
+                            except Exception:
+                                continue  # Skip problematic files
+        
+        # Make sure we return something, even if it's just an indication nothing was found
+        if len(error_context) == 0:
+            error_context = [{
+                'error': 'No matching error entries found',
+                'search_term': error_message,
+                'searched_path': norm_log_folder_path
+            }]
+            
         return error_context
     
     @kernel_function(
@@ -391,65 +539,26 @@ class LisaErrorAnalyzerPlugin:
 
         files = list(dict.fromkeys(files))
 
-        print("\nThe agent is gathering information. Please wait...")
+        print("\nThe agent is gathering information. Please wait...\n")
         return files    
     
-    # @kernel_function(
-    #     name="parse_logs",
-    #     description="Parses the log file content into structured log entries up until the ERROR log entry. Only limits parsing of the last MAX_RECENT_COMMANDS" \
-    #     "entries of the same thread as the ERROR entry to prevent excessive memory usage. " \
-    #     "Extracts: timestamp, thread number, log level, component, and message."
-    # )
-    # def parse_logs(self, file_path: str) -> List[dict]:
-    #     """
-    #     Parses the log entries into structured LogEntry objects up until the error log entry. Only parse the last MAX_RECENT_COMMANDS entries of the same thread.
-    #     input_path is the path to the log file to be parsed.
-    #     """
-    #     parsed_entries = []
-    #     norm_path = os.path.normpath(file_path)
-    #     logging.debug(f"Parsing log file: {norm_path}")
-
-    #     if os.path.exists(norm_path):
-    #         with open(norm_path, 'r') as f:
-    #             for i, line in enumerate(f, start=1):
-    #                 # Parse each line into a LogEntry object
-    #                 entry = parse_log_entry(line, i)
-    #                 if entry:
-    #                     parsed_entries.append(entry)
-    #                     logging.debug(f"Parsed entry: {i} - {entry['raw_line']}")
-    #                     if entry.get('is_error', False):
-    #                         break  # Stop parsing if an error entry is found
-    #     return parsed_entries
-    
-    # @kernel_function(
-    #     name="filter_by_thread_id",
-    #     description="Parses the log entries produced by parse_logs() and filters them by thread number."
-    #     "Limit log entries to MAX_RECENT_COMMANDS." \
-    # )
-    # def filter_by_thread_id(self, error_thread_id: str, parsed_entries: List[dict]) -> List[dict]:
-    #     """
-    #     Filters the parsed log entries by thread number.
+    @kernel_function(
+        name="locate_error_context",
+        description="Locates the ERROR log entry and its associated traceback from a log file, given a line number where the error message appears. " \
+        "Returns the ERROR entry's line number, content, and the full traceback that follows it."
+    )
+    def locate_error_context(self, file_path: str, error_line: int) -> dict:
+        """
+        Locates the ERROR log entry and its associated traceback.
         
-    #     Args:
-    #         thread_number: The thread number to filter by
-    #         parsed_entries: List of all parsed LogEntry objects
+        Args:
+            file_path: Path to the log file
+            error_line: Line number where the error message was found
             
-    #     Returns:
-    #         List of LogEntry objects that match the specified thread number
-    #     """
-    #     if not error_thread_id:
-    #         return []
-
-    #     # Filter entries by thread number
-    #     filtered_entries = [
-    #         entry for entry in parsed_entries 
-    #         if entry.get('thread_number') == error_thread_id
-    #     ]
-
-    #     # Limit to MAX_RECENT_COMMANDS
-    #     return filtered_entries[-AnalysisLimits.MAX_RECENT_COMMANDS:]
-
-        
+        Returns:
+            Dictionary with error information and traceback
+        """
+        return find_error_and_traceback(file_path, error_line)
 
 ## Path input structure
 @dataclass
@@ -480,26 +589,91 @@ class LogAgent:
         # Enable planning -- the model decides which function to use, if any
         self.execution_settings = AzureChatPromptExecutionSettings()
         self.execution_settings.function_choice_behavior = FunctionChoiceBehavior.Auto()
+        
+        # Initialize chat history with truncation capability
+        # This keeps the conversation size manageable while preserving important context
+        self.history = ChatHistoryTruncationReducer(
+            target_count=8,  # Keep 8 most recent messages
+            threshold_count=4,  # Allow up to 12 messages before truncating (target + threshold)
+            auto_reduce=True,  # Automatically truncate when messages exceed target+threshold
+            service=self.chat_completion,
+            # Preserve important technical information in truncated messages
+            summarization_instructions="""Summarize the chat history while preserving all critical technical details:
+            - Exact error messages and their locations
+            - Thread IDs, timestamps, and command details
+            - File paths, line numbers, and code references
+            - Root causes identified in the analysis
+            """
+        )
+    
+    def clear_history(self):
+        """
+        Explicitly clear the chat history to start a fresh analysis.
+        This is useful when switching to a completely different error or log set.
+        """
+        if hasattr(self, 'history') and self.history is not None:
+            self.history.messages = []
+            print("Chat history has been cleared.")
+        
+        if hasattr(self, 'current_error'):
+            delattr(self, 'current_error')
     
     async def analyze(self, error_message: str, paths: List[InputPath]) -> str:
-        self.history = ChatHistory()
+        # Check if we need to reset the history (e.g., for a new analysis session)
+        # We keep the history if it's the same error message to maintain context
+        if not hasattr(self, 'current_error') or self.current_error != error_message:
+            # Start a new analysis session
+            self.history.messages = []  # Clear history
+            self.current_error = error_message
+            
+            # Load system message from file
+            system_prompt_path = os.path.join(working_directory, "system_prompt.txt")
+            with open(system_prompt_path, 'r') as f:
+                system_message = f.read().strip()
+            
+            # Guide the model with system message
+            self.history.add_system_message(system_message)
+        else:
+            # If continuing analysis on same error, add a delimiter
+            self.history.add_assistant_message("--- Continuing analysis of the same error ---")
 
-        # Load system message from file
-        system_prompt_path = os.path.join(working_directory, "system_prompt.txt")
-        with open(system_prompt_path, 'r') as f:
-            system_message = f.read().strip()
-        
-        # Guide the model with system message
-        self.history.add_system_message(system_message)
-
+        # Display files that will be used for analysis
         assistant_message = "The following files will be used for analysis:\n"
         for path in paths:
             assistant_message += f"- {path.type}: {path.value}\n"
         self.history.add_assistant_message(assistant_message)        # Add the error message as a user message so the model knows what to search for
 
-        self.history.add_user_message(f"Please search for this error: {error_message} in the logs. Troubleshoot the error, identify the root causes, and suggest the best course of action to resolve the issue. " )
+        # Load user message from file and format it with the error message
+        user_prompt_path = os.path.join(working_directory, "user_prompt.txt")
+        with open(user_prompt_path, 'r') as f:
+            user_message_template = f.read().strip()
+        
+        # Format the user message with the error
+        user_message = user_message_template.format(error_message=error_message)
+        self.history.add_user_message(user_message)
 
         print("The agent is analyzing the error and gathering information. Please wait...")
+        
+        # Check if we need to reduce the chat history before sending to the model
+        message_count = len(self.history.messages)
+        target_count = getattr(self.history, "target_count", 8)
+        threshold = getattr(self.history, "threshold_count", 4)
+        
+        # Show conversation stats to help understand truncation behavior
+        print(f"Current conversation: {message_count} messages (target: {target_count}, threshold: {threshold})")
+        
+        # Trigger truncation if we're approaching the limit
+        if message_count > (target_count + threshold):
+            print("\n🔄 Truncating chat history...")
+            print(f"Message count ({message_count}) exceeds limit ({target_count + threshold})")
+            
+            try:
+                reduced_history = await self.history.reduce()
+                
+                if reduced_history:
+                    print(f"✅ History reduced from {message_count} to {len(reduced_history.messages)} messages")
+            except Exception as e:
+                print(f"Error during truncation: {str(e)}")
 
         # Wait for a response from the model
         result = await self.chat_completion.get_chat_message_content(
@@ -525,15 +699,21 @@ async def main():
     print("The agent is ready!")
 
     # Load test data by index - change this index to test different cases
-    test_index = 10  # Change this to test different error cases (0-11 available)
+    test_index = 8  # Change this to test different error cases (0-11 available)
     
     try:
         test_data = load_test_data_by_index(test_index)
-        print(f"Loading test case {test_index}: {test_data['path']}")
+        print(f"Loading test case {test_data}")
         
         # Extract the log folder path from the test path
         log_base_path = "C:\\Users\\t-linm\\Downloads\\log_analyzer_20250603\\log_analyzer_20250603"
         log_folder_path = os.path.join(log_base_path, test_data['path'])
+        
+        # Display chat history truncation configuration
+        target_count = getattr(agent.history, "target_count", 8)
+        threshold = getattr(agent.history, "threshold_count", 4)
+        print(f"Chat history configured with target_count={target_count}, threshold_count={threshold}")
+        print(f"Truncation will trigger when messages exceed {target_count + threshold}")
         
         await agent.analyze(
             error_message=test_data['error_message'],
@@ -542,6 +722,16 @@ async def main():
                 InputPath(type="code", value="C:/Users/t-linm/Documents/lisa-fork"),
             ]
         )
+        
+        # Final check after analysis
+        final_count = len(agent.history.messages)
+        print(f"\nFinal message count after analysis: {final_count}")
+        
+        # Display whether truncation occurred
+        if final_count <= (target_count + threshold):
+            print(f"Chat history is within the configured limits ({target_count + threshold})")
+        else:
+            print(f"Chat history exceeds the configured limits ({target_count + threshold})")
         
     except (FileNotFoundError, IndexError, ValueError) as e:
         print(f"Error loading test data: {e}")
