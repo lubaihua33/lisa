@@ -1,0 +1,11 @@
+Please search for this error: {error_message} in the logs. Can you:
+        
+1. Start by searching for the error using search_error() to find the file and line number 
+2. Use locate_error_context() to find the actual ERROR log entry (typically 0-5 lines before the traceback begins)
+3. Parse the logs with parse_logs() and display the structured entries in a clear tabular format
+4. Show the full execution flow leading to the error with timestamps and thread IDs
+5. Filter log entries by the error thread ID to focus on the relevant context
+6. Troubleshoot the error and identify the root cause
+7. Suggest the best course of action to resolve the issue
+
+Make sure to show the complete traceback and any ERROR log entries.
