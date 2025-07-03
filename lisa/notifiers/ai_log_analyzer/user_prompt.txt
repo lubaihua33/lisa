@@ -1,11 +1,21 @@
-Please search for this error: {error_message} in the logs. Can you:
-        
-1. Start by searching for the error using search_error() to find the file and line number 
-2. Use locate_error_context() to find the actual ERROR log entry (typically 0-5 lines before the traceback begins)
-3. Parse the logs with parse_logs() and display the structured entries in a clear tabular format
-4. Show the full execution flow leading to the error with timestamps and thread IDs
-5. Filter log entries by the error thread ID to focus on the relevant context
-6. Troubleshoot the error and identify the root cause
-7. Suggest the best course of action to resolve the issue
+Please search and troubleshoot this error in the logs: {error_message}.
 
-Make sure to show the complete traceback and any ERROR log entries.
+For a comprehensive analysis:
+1. Use the search_error function to analyze all logs including LISA logs and serial console logs
+2. If you need detailed serial log analysis, use the search_serial_logs function for thorough examination of OS and kernel issues
+3. Pay special attention to serial logs when the error might involve OS provisioning, kernel panics, or boot failures
+4. Look for serial logs in:
+   - Any folders I've explicitly provided for analysis
+   - Environment folders identified by the name column in environment_stats.log
+   - Files with "serial", "console", "boot", "ttyS", "dmesg", or "kernel" in their names
+5. When examining serial logs, focus on:
+   - Boot sequence errors
+   - Kernel panics or crashes
+   - Hardware initialization failures
+   - Filesystem mount issues
+   - Service startup failures
+   - Network configuration problems
+6. Correlate issues between serial logs and LISA logs to understand the full failure scenario
+7. Provide detailed troubleshooting steps based on all available evidence
+
+Remember that serial console logs often contain the root cause of failures that aren't visible in other logs. For OS-level or kernel-related issues, serial logs are the most important source of diagnostic information.

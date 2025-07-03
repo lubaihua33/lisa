@@ -12,11 +12,13 @@ from dotenv import load_dotenv
 from semantic_kernel import Kernel
 from semantic_kernel.utils.logging import setup_logging
 from semantic_kernel.functions import kernel_function
-from semantic_kernel.connectors.memory.in_memory import InMemoryVectorStore
+from semantic_kernel.core_plugins.text_memory_plugin import TextMemoryPlugin
 from semantic_kernel.contents import ChatHistoryTruncationReducer
 from semantic_kernel.connectors.ai.function_choice_behavior import FunctionChoiceBehavior
 from semantic_kernel.contents.chat_history import ChatHistory, ChatMessageContent
 from semantic_kernel.connectors.ai.open_ai import AzureOpenAISettings, AzureChatCompletion, OpenAITextEmbedding
+from semantic_kernel.memory.volatile_memory_store import VolatileMemoryStore
+from semantic_kernel.memory import SemanticTextMemory
 from semantic_kernel.core_plugins import WebSearchEnginePlugin
 from semantic_kernel.connectors.ai.open_ai.prompt_execution_settings.azure_chat_prompt_execution_settings import (
     AzureChatPromptExecutionSettings,
@@ -71,6 +73,7 @@ class RegexPatterns:
 class FileExtensions:
     """File extensions for log files"""
     LOG_EXTENSION = '.log'
+    SERIAL_LOG_EXTENSION = '_serial_console.log'
 
 
 class ExitCodes:
@@ -215,11 +218,18 @@ def setup_debug_logging():
     formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     file_handler.setFormatter(formatter)
 
+    # Create console handler for INFO and above
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(formatter)
+
     # Remove any existing handlers except the file handler
     for handler in logging.getLogger().handlers[:]:
         logging.getLogger().removeHandler(handler)
     
+    # Add both file and console handlers
     logging.getLogger().addHandler(file_handler)
+    logging.getLogger().addHandler(console_handler)
     
     # # Enable detailed logging for Semantic Kernel components
     # logging.getLogger("semantic_kernel").setLevel(logging.DEBUG)
@@ -232,7 +242,8 @@ def setup_debug_logging():
     # logging.getLogger("httpx").setLevel(logging.DEBUG)
     # logging.getLogger("openai").setLevel(logging.DEBUG)
     
-    # print(f"Debug logging enabled. Log file: {tracing_filepath}")
+    print(f"Debug logging enabled. Log file: {tracing_filepath}")
+    logging.info(f"Debug logging configured. Writing to: {tracing_filepath}")
 
 
 def map_log_path_to_local(log_path: str, local_root: str, anchor_dir: str="lisa") -> str:
@@ -289,7 +300,7 @@ class LisaErrorAnalyzerPlugin:
     )
     def search_error(self, error_message: str, log_folder_path: str) -> List[dict]:
         """
-        Searches for a specific error message in the log files log_folder_path.
+        Searches for a specific error message in the root log file located in log_folder_path.
         Return two types of log entries of type LogEntry: the ERROR log entry, and the entry that contains the error message.
         """
         norm_log_folder_path = os.path.normpath(log_folder_path)
@@ -308,7 +319,6 @@ class LisaErrorAnalyzerPlugin:
                     try:
                         with open(file_path, 'r') as f:
                             for i, line in enumerate(f, start=1):
-                                logging.debug(f"Checking line {i} in {file_path}")
                                 # First check if the error message is in the line
                                 if error_message in line:
                                     logging.debug(f"Found error message in {file_path} at line {i}")
@@ -374,13 +384,13 @@ class LisaErrorAnalyzerPlugin:
         return error_context
     
     @kernel_function(
-        name="extract_segment",
+        name="read_text_file",
         description="Extracts the call trace or relevant code segment from a file (log or code) by locating the section that contains the call trace" \
-        " or error context associated with a given error message. Returns a JSON object containing the line numbers in the log and the extracted segment. " \
+        " or error context associated with a given error message. Returns a string containing the line numbers in the log and the extracted segment. " \
         "The relevant segment may start several lines before the error line, so use an offset (e.g. 20-30 lines before the error line) to capture the full content." \
         "For the call trace in the log, capture the line number corresponding to the ERROR-level log entry.",
     )
-    def extract_segment(self, line_number: int, input_path: str, offset: int) -> str:
+    def read_text_file(self, start_line_offset: int, input_path: str, line_count: int) -> str:
         """
         Extracts the lines of the relevant segment from the file (log or code) starting from the line number of the error message.
         offset allows the model to capture several lines before the error line to get the full context.
@@ -389,12 +399,13 @@ class LisaErrorAnalyzerPlugin:
         norm_path = os.path.normpath(input_path)
 
         if os.path.exists(norm_path):
-            traceback_start = max(0, line_number - offset)
+            traceback_start = max(0, start_line_offset )
+            traceback_end = traceback_start + line_count
             with open(norm_path, 'r') as f:
                 for i, line in enumerate(f, start=1):
-                    if traceback_start <= i <= line_number:
+                    if traceback_start <= i <= traceback_end:
                         traceback.append(f"({i}): {line.rstrip()}")
-                    if i > line_number:
+                    if i > traceback_end:
                         break
         return "\n".join(traceback)
     
@@ -421,8 +432,40 @@ class LisaErrorAnalyzerPlugin:
         files = list(dict.fromkeys(files))
 
         print("\nThe agent is gathering information. Please wait...\n")
-        return files    
+        return files
     
+    @kernel_function(
+        name="search_serial_logs",
+        description="Searches for specific keywords in the serial logs to identify relevant entries related to the error message. This function is called when panic is found in the logs."
+    )
+    def search_serial_logs(self, error_message: str, log_folder_path: str) -> list:
+        """
+        Searches for specific keywords from the error message in the serial logs to identify relevant entries.
+        Returns a list of log entries that match the search criteria.
+        """
+        logging.debug(f"Searching serial logs in folder: {log_folder_path} for error message: {error_message}")
+        norm_log_folder_path = os.path.normpath(log_folder_path)
+        serial_log_entries = []
+
+        if not os.path.exists(norm_log_folder_path):
+            logging.error(f"Log folder path does not exist: {norm_log_folder_path}")
+            return serial_log_entries
+
+        for root, _, files in os.walk(norm_log_folder_path):
+            logging.debug(f"Checking serial directory: {root}")
+            for file in files:
+                if file.endswith(FileExtensions.SERIAL_LOG_EXTENSION):
+                    logging.debug(f"Processing serial log file: {file}")
+                    file_path = os.path.join(root, file)
+                    with open(file_path, 'r') as f:
+                        lines = f.readlines()
+                        for i, line in enumerate(lines):
+                            # Look for particular keywords from the error message
+                            if any(keyword.lower() in line.lower() for keyword in ErrorKeywords.ALL_ERROR_PATTERNS):
+                                logging.debug("found keyword in serial log: ", line.strip())
+                                serial_log_entries.append(line.strip())
+
+        return serial_log_entries
 
 ## Path input structure
 @dataclass
@@ -443,6 +486,9 @@ class LogAgent:
         )
         self.kernel.add_service(self.chat_completion)
 
+        # Add semantic text memory with VolatileMemoryStore
+        # self.add_semantic_text_memory()
+
         self.kernel.add_plugin(
             LisaErrorAnalyzerPlugin(),
             plugin_name="LisaErrorAnalyzer",
@@ -454,32 +500,60 @@ class LogAgent:
         self.execution_settings = AzureChatPromptExecutionSettings()
         self.execution_settings.function_choice_behavior = FunctionChoiceBehavior.Auto()
         
+        # Balanced consistency settings for log analysis
+        self.execution_settings.temperature = 0.1         # Very low randomness
+        self.execution_settings.top_p = 0.3              # Focused but not too restrictive
+        self.execution_settings.max_tokens = 4000        # Consistent response length
+        self.execution_settings.frequency_penalty = 0.1  # Slight penalty for repetition
+        self.execution_settings.presence_penalty = 0.1   # Slight penalty for presence
+
         # Load summarization instructions from file
         summarization_path = os.path.join(working_directory, "summarization_instructions.txt")
-        try:
-            with open(summarization_path, 'r') as f:
-                logging.info(f"Loading summarization instructions from {summarization_path}")
-                summarization_instructions = f.read()
-        except FileNotFoundError:
-            logging.warning(f"Summarization instructions file not found: {summarization_path}")
-            logging.warning("Using default summarization instructions")
-            summarization_instructions = """Preserve all critical technical details including:
-                - Complete error messages with their exact text and line numbers
-                - Thread IDs, command IDs, timestamps in their original format
-                - File paths, code snippets, and line numbers
-                - Exit codes and command outputs related to failures
-                - Root causes previously identified with their supporting evidence"""
+        with open(summarization_path, 'r') as f:
+            logging.info(f"Loading summarization instructions from {summarization_path}")
+            summarization_instructions = f.read()
         
         # Initialize chat history with truncation capability
         self.history = ChatHistoryTruncationReducer(
-            target_count=8,  # Keep 8 most recent messages
-            threshold_count=4,  # Allow up to 12 messages before truncating (target + threshold)
+            target_count=1,  # Keep 1 most recent message
+            threshold_count=4,  # Allow up to 5 messages before truncating (target + threshold)
             auto_reduce=True,  # Automatically truncate when messages exceed target+threshold
             service=self.chat_completion,
             summarization_instructions=summarization_instructions
         )
     
-    def clear_history(self):
+    ## TO-DO
+    # def add_semantic_text_memory(self, plugin_name="TextMemoryPlugin") -> None:
+    #     """
+    #     Add semantic text memory capability to the kernel using a VolatileMemoryStore.
+        
+    #     Args:
+    #         plugin_name: The name to register the memory plugin under
+    #     """
+    #     # Initialize text embedding service if not already done
+    #     self.text_embedding = OpenAITextEmbedding(
+    #         ai_model_id="text-embedding-ada-002",
+    #         api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+    #     )
+    #     self.kernel.add_service(self.text_embedding)
+        
+        
+    #     # Create semantic text memory with the store and embedding service
+    #     memory = SemanticTextMemory(
+    #         storage=VolatileMemoryStore(),
+    #         embeddings_generator=self.text_embedding
+    #     )
+        
+    #     # Add memory plugin to the kernel
+    #     self.kernel.add_plugin(
+    #         TextMemoryPlugin(memory),
+    #         plugin_name=plugin_name
+    #     )
+        
+    #     logging.info(f"Semantic text memory plugin '{plugin_name}' added to the kernel with VolatileMemoryStore.")
+        
+    
+    async def clear_history(self, save_to_memory=True):
         """
         Explicitly clear the chat history to start a fresh analysis.
         This is useful when switching to a completely different error or log set.
@@ -586,7 +660,7 @@ async def main():
     print("The agent is ready!")
 
     # Load test data by index - change this index to test different cases (0-11)
-    test_index = 2
+    test_index = 8
     
     try:
         test_data = load_test_data_by_index(test_index)

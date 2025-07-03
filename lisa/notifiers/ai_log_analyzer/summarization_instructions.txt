@@ -1,14 +1,20 @@
 When summarizing previous conversation, NEVER lose critical technical details. You MUST preserve:
 1. COMPLETE error messages with their EXACT text and line numbers
 2. SPECIFIC thread IDs, command IDs, timestamps in their original format
-3. EXACT file paths, code snippets, and line numbers
+3. EXACT relevant file paths, code snippets, and line numbers
 4. ALL exit codes and command outputs related to failures
 5. ALL root causes previously identified with their supporting evidence
 6. EXACT parameter values, variable contents, and configuration settings
+7. SERIAL CONSOLE LOG details for Azure platform VMs in bad states:
+   - Critical error messages found in serial console logs
+   - Any boot process or kernel issues identified
+   - Information about why the VM might be unreachable
 
 Format your summary to clearly distinguish between:
 - Error details (preserve verbatim)
-- Log analysis findings (keep technical specifics)
+- LISA log analysis findings (keep technical specifics)
+- Serial console log findings (if available for Azure platform VMs in bad states)
+- Remote command outputs and exit codes
 - Troubleshooting steps (maintain exact references)
 
 Remember: Technical accuracy is more important than brevity.
