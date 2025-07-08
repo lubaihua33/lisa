@@ -5,7 +5,7 @@ import re
 import os
 import json
 from enum import Enum
-
+from rapidfuzz import fuzz
 from typing import List
 from dataclasses import dataclass
 from dotenv import load_dotenv
@@ -47,28 +47,20 @@ class ErrorKeywords:
     CRITICAL_PATTERNS = ['CRITICAL', 'FATAL', 'PANIC']
     ALL_ERROR_PATTERNS = ERROR_PATTERNS + CRITICAL_PATTERNS
 
-
-class CommandKeywords:
-    """Keywords to identify command execution patterns"""
-    EXECUTION_PATTERNS = ['executing', 'command', 'running', 'cmd']
-    STATUS_PATTERNS = ['exit', 'return', 'status', 'failed', 'error']
-    RESET_PATTERNS = ['exit', 'return']
+class Thresholds:
+    FUZZY_THRESHOLD = 90  # Fuzzy matching threshold for error messages
+    CONTEXT_THRESHOLD = 95
+    VERBOSITY_LENGTH_THRESHOLD = 1000  # Max length for verbose log messages
+    
 
 
 class RegexPatterns:
     """Regex patterns for log parsing"""
     # LISA log format: timestamp[thread][level] component message
     LISA_LOG_PATTERN = r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})\[(\d+)\]\[([^\]]+)\]\s+([^\s]+)\s+(.*)$'
-    
-    # Command patterns
-    COMMAND_ID_PATTERN = r'\bcmd\[(\d+)\]'
-    COMMAND_PATTERN = r"(executing|command|cmd|run).*?[:=]\s*(.+)"
-    EXIT_CODE_PATTERN = r"(exit|return|status).*?[:=]\s*(\d+)"
-    
-    # File path patterns
+
     FILE_PATH_PATTERN = r'File "([^"]+)"'
     
-
 
 class FileExtensions:
     """File extensions for log files"""
@@ -76,14 +68,6 @@ class FileExtensions:
     SERIAL_LOG_EXTENSION = '_serial_console.log'
 
 
-class ExitCodes:
-    """Exit code constants"""
-    SUCCESS = '0'
-
-class AnalysisLimits:
-    """Configurable limits for analysis output"""
-    MAX_ERROR_ENTRIES = 10
-    MAX_RECENT_COMMANDS = 25
 
 ## Log entry structure
 @dataclass
@@ -201,6 +185,50 @@ def load_test_data_by_index(index: int) -> dict:
     except json.JSONDecodeError as e:
         raise ValueError(f"Invalid JSON format in inputs.json: {e}")
 
+class VerbosityFilter(logging.Filter):
+    """
+    A filter to truncate verbose log messages rather than excluding them entirely.
+    Specifically designed for OpenAI API logs to show request/response structure
+    without the full content payload.
+    """
+    def __init__(self):
+        super().__init__()
+        # Patterns that indicate verbose messages we want to truncate
+        self.verbose_patterns = {
+            "Request options:": 200,   # Truncate after 200 chars 
+            "Response body:": 300,     # Truncate after 300 chars
+            '"content": "': 100,       # Truncate content fields
+            '"messages": [': 150,      # Truncate message arrays
+            '"input": "': 100,         # Truncate input fields
+            '"function_call": {': 150, # Truncate function calls
+            '"choices": [': 200,       # Truncate choices array
+        }
+        
+    def filter(self, record):
+        # Skip truncation for non-openai messages
+        if not record.name.startswith("openai"):
+            return True
+            
+        # Only process debug level messages from openai
+        if record.levelno <= logging.DEBUG:
+            message = record.getMessage()
+            
+            # Check if message is very long (exceeds threshold)
+            if len(message) > Thresholds.VERBOSITY_LENGTH_THRESHOLD:
+                # Check for patterns that should be truncated
+                for pattern, max_length in self.verbose_patterns.items():
+                    if pattern in message:
+                        # Find the pattern position
+                        pattern_pos = message.find(pattern)
+                        # Keep the header and some context, then add truncation notice
+                        truncated_msg = f"{message[:pattern_pos + max_length]}... [truncated {len(message) - pattern_pos - max_length} chars]"
+                        
+                        record.msg = truncated_msg
+                        record.args = ()
+                        break
+
+        return True
+
 def setup_debug_logging():
     debug_dir = os.path.join(working_directory,
         "resources",
@@ -219,9 +247,9 @@ def setup_debug_logging():
     file_handler.setFormatter(formatter)
 
     # Create console handler for INFO and above
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(formatter)
+    # console_handler = logging.StreamHandler()
+    # console_handler.setLevel(logging.INFO)
+    # console_handler.setFormatter(formatter)
 
     # Remove any existing handlers except the file handler
     for handler in logging.getLogger().handlers[:]:
@@ -229,7 +257,11 @@ def setup_debug_logging():
     
     # Add both file and console handlers
     logging.getLogger().addHandler(file_handler)
-    logging.getLogger().addHandler(console_handler)
+    # logging.getLogger().addHandler(console_handler)
+    
+    # Add verbosity filter to truncate verbose messages
+    verbosity_filter = VerbosityFilter()
+    logging.getLogger().addFilter(verbosity_filter)
     
     # # Enable detailed logging for Semantic Kernel components
     # logging.getLogger("semantic_kernel").setLevel(logging.DEBUG)
@@ -242,7 +274,6 @@ def setup_debug_logging():
     # logging.getLogger("httpx").setLevel(logging.DEBUG)
     # logging.getLogger("openai").setLevel(logging.DEBUG)
     
-    print(f"Debug logging enabled. Log file: {tracing_filepath}")
     logging.info(f"Debug logging configured. Writing to: {tracing_filepath}")
 
 
@@ -265,9 +296,9 @@ def map_log_path_to_local(log_path: str, local_root: str, anchor_dir: str="lisa"
     else:
         return ""
     
-def parse_log_entry(log_entry: str, log_line: int) -> LogEntry | None:
+def parse_lisa_log_entry(log_entry: str, log_line: int) -> LogEntry | None:
     """
-    Parses a single log entry string into a structured LogEntry object.
+    Parses a single LISA log entry string into a structured LogEntry object.
     
     Args:
         log_entry: A single line from the log file.
@@ -277,111 +308,129 @@ def parse_log_entry(log_entry: str, log_line: int) -> LogEntry | None:
         LogEntry object with parsed components: timestamp, thread number, log level, component, message.
         Returns None if the entry doesn't match the expected format.
     """
+    # Try to match the LISA log pattern
+    match = re.match(RegexPatterns.LISA_LOG_PATTERN, log_entry.strip())
+    if match:
+        timestamp, thread_number, log_level, component, message = match.groups()
+        
+        # Check for command ID in the message
+        cmd_id = None
+        cmd_match = re.search(RegexPatterns.COMMAND_ID_PATTERN, message)
+        if cmd_match:
+            cmd_id = cmd_match.group(1)
+            
+        return LogEntry(
+            timestamp=timestamp,
+            thread_number=thread_number,
+            log_level=log_level,
+            component=component,
+            cmd_id=cmd_id,
+            message=message,
+            line_number=log_line,
+            raw_line=log_entry.strip()
+        )
+    
     # For error messages that don't match the standard format but contain ERROR/CRITICAL keywords
     for keyword in ErrorKeywords.ALL_ERROR_PATTERNS:
         if keyword in log_entry.upper():
             logging.debug(f"Found keyword {keyword} in log: {log_entry}")
             return LogEntry(
-                log_level=LogLevel.ERROR,
+                log_level=LogLevel.ERROR.value,
                 message=log_entry.strip(),
                 line_number=log_line,
-                raw_line=log_entry.strip()
+                raw_line=log_entry.strip(),
+                is_error=True
             )
 
-    return None  # Return None if the entry doesn't match the expected format
+    # If no pattern matches, return a basic entry
+    return LogEntry(
+        message=log_entry.strip(),
+        line_number=log_line,
+        raw_line=log_entry.strip()
+    )
 
 
 ## Agent plugin definitions
 class LisaErrorAnalyzerPlugin:
     @kernel_function(
-        name="search_error",
-        description="Searches for a specific error message in the log files within the configured log directory " \
-        "and once found, returns the file path and line number associated with the error message in a structured format.",
+        name="search_logs",
+        description="Search function that looks for error messages in both standard log files and serial console logs."
     )
-    def search_error(self, error_message: str, log_folder_path: str) -> List[dict]:
+    def search_logs(self, error_message: str, log_folder_path: str) -> dict:
         """
-        Searches for a specific error message in the root log file located in log_folder_path.
-        Return two types of log entries of type LogEntry: the ERROR log entry, and the entry that contains the error message.
+        Searches for a specific error message in both standard log files and serial console logs.
+        
+        This unified function combines the capabilities of search_error and search_serial_logs,
+        returning structured results for both types of logs.
+        
+        Args:
+            error_message: The error message or keywords to search for
+            log_folder_path: The path to the log directory to search in
+            
+        Returns:
+            Dictionary containing structured results from both standard and serial console logs
         """
         norm_log_folder_path = os.path.normpath(log_folder_path)
 
         if not os.path.exists(norm_log_folder_path):
             logging.error(f"Log folder path does not exist: {norm_log_folder_path}")
-            return []
+            return {"standard_context": [], "serial_context": []}
 
-        # Include line number of error_message, and metadata about the ERROR log entry.
-        error_context = []
+        # Combined results
+        log_context = {
+            "standard_context": [],
+            "serial_context": []
+        }
 
+        # Search both standard logs and serial logs
         for root, _, files in os.walk(norm_log_folder_path):
             for file in files:
-                if file.endswith(FileExtensions.LOG_EXTENSION):
-                    file_path = os.path.join(root, file)
-                    try:
-                        with open(file_path, 'r') as f:
-                            for i, line in enumerate(f, start=1):
-                                # First check if the error message is in the line
-                                if error_message in line:
-                                    logging.debug(f"Found error message in {file_path} at line {i}")
+                file_path = os.path.join(root, file)
+                is_standard_log = file.endswith(FileExtensions.LOG_EXTENSION)
+                is_serial_log = file.endswith(FileExtensions.SERIAL_LOG_EXTENSION)
+                
+                if not (is_standard_log or is_serial_log):
+                    continue  # Skip non-log files
+                    
+                try:
+                    with open(file_path, 'r') as f:
+                        for i, line in enumerate(f, start=1):
+                            # Process standard logs
+                            if is_standard_log and not is_serial_log:
+                                # Use fuzzy matching for standard logs
+                                similarity = fuzz.ratio(line.strip().lower(), error_message.strip().lower())
+                                if similarity >= Thresholds.FUZZY_THRESHOLD:
+                                    logging.debug(f"Found error message in {file_path} at line {i} with similarity {similarity}")
+                                    
                                     # Parse the line into structured format
-                                    parsed_line = parse_log_entry(line, i)
-                                    logging.debug(f"parsed_line: {parsed_line}")
-
-                                    # If parsing failed, create a basic entry with raw text
-                                    if parsed_line is None:
-                                        parsed_line = {
-                                            'line_number': i,
-                                            'raw_line': line.strip(),
-                                            'file_path': file_path,
-                                            'is_error': True
-                                        }
-                                    else:
-                                        # Add file path to the parsed entry
-                                        parsed_line['file_path'] = file_path
+                                    parsed_line = parse_lisa_log_entry(line, i)
+                                    
+                                    # Add metadata
+                                    parsed_dict = parsed_line.to_dict()
+                                    parsed_dict['file_path'] = file_path
+                                    parsed_dict['similarity'] = similarity
+                                    parsed_dict['is_exact_match'] = similarity > 95
                                     
                                     # Add to context
-                                    error_context.append(parsed_line)
-                    except FileNotFoundError:
-                        continue  # Skip if file is not found
-                    except Exception as e:
-                        continue
-        print(f"Error context found with {len(error_context)} entries")
-        if len(error_context) == 0:
-            logging.warning("No error context found. The error message may not be present in the logs.")
-            # As a fallback, try searching for partial matches
-            search_terms = error_message.split()
-            if len(search_terms) > 2:  # Only try if we have multiple words
-                logging.info(f"Trying fallback search with key terms: {search_terms[:3]}")
-                # Try searching for the first few terms as a substring
-                partial_search = ' '.join(search_terms[:3])
-                for root, _, files in os.walk(norm_log_folder_path):
-                    for file in files:
-                        if file.endswith(FileExtensions.LOG_EXTENSION):
-                            file_path = os.path.join(root, file)
-                            try:
-                                with open(file_path, 'r') as f:
-                                    for i, line in enumerate(f, start=1):
-                                        if partial_search in line:
-                                            print(f"Found partial match in {file_path} at line {i}")
-                                            # Create basic entry with raw text
-                                            error_context.append({
-                                                'line_number': i,
-                                                'raw_line': line.strip(),
-                                                'file_path': file_path,
-                                                'is_partial_match': True
-                                            })
-                                            break  # Just find the first occurrence
-                            except Exception:
-                                continue  # Skip problematic files
-        
-        # Make sure we return something, even if it's just an indication nothing was found
-        if len(error_context) == 0:
-            error_context = [{
-                'error': 'No matching error entries found',
-                'search_term': error_message,
-                'searched_path': norm_log_folder_path
-            }]
-            
-        return error_context
+                                    log_context["standard_context"].append(parsed_dict)
+                            
+                            # Process serial logs
+                            elif is_serial_log:
+                                partial_similarity = fuzz.partial_ratio(line.strip().lower(), error_message.strip().lower())
+                                if partial_similarity >= Thresholds.CONTEXT_THRESHOLD:
+                                    log_context["serial_context"].append({
+                                        'line_number': i,
+                                        'raw_line': line.strip(),
+                                        'file_path': file_path,
+                                        'similarity': partial_similarity
+                                    })
+                except Exception as e:
+                    logging.error(f"Error processing file {file_path}: {str(e)}")
+                    continue
+
+        logging.info(f"log_context: {log_context}")
+
+        return log_context
     
     @kernel_function(
         name="read_text_file",
@@ -434,38 +483,6 @@ class LisaErrorAnalyzerPlugin:
         print("\nThe agent is gathering information. Please wait...\n")
         return files
     
-    @kernel_function(
-        name="search_serial_logs",
-        description="Searches for specific keywords in the serial logs to identify relevant entries related to the error message. This function is called when panic is found in the logs."
-    )
-    def search_serial_logs(self, error_message: str, log_folder_path: str) -> list:
-        """
-        Searches for specific keywords from the error message in the serial logs to identify relevant entries.
-        Returns a list of log entries that match the search criteria.
-        """
-        logging.debug(f"Searching serial logs in folder: {log_folder_path} for error message: {error_message}")
-        norm_log_folder_path = os.path.normpath(log_folder_path)
-        serial_log_entries = []
-
-        if not os.path.exists(norm_log_folder_path):
-            logging.error(f"Log folder path does not exist: {norm_log_folder_path}")
-            return serial_log_entries
-
-        for root, _, files in os.walk(norm_log_folder_path):
-            logging.debug(f"Checking serial directory: {root}")
-            for file in files:
-                if file.endswith(FileExtensions.SERIAL_LOG_EXTENSION):
-                    logging.debug(f"Processing serial log file: {file}")
-                    file_path = os.path.join(root, file)
-                    with open(file_path, 'r') as f:
-                        lines = f.readlines()
-                        for i, line in enumerate(lines):
-                            # Look for particular keywords from the error message
-                            if any(keyword.lower() in line.lower() for keyword in ErrorKeywords.ALL_ERROR_PATTERNS):
-                                logging.debug("found keyword in serial log: ", line.strip())
-                                serial_log_entries.append(line.strip())
-
-        return serial_log_entries
 
 ## Path input structure
 @dataclass
@@ -593,30 +610,13 @@ class LogAgent:
         self.history.add_user_message(user_message)
 
         print("\nThe agent is analyzing the error and gathering information. Please wait...\n\n")
+
+        before = len(self.history.messages)
+        print(f"before: {before}")
+
+        # Capture messages before the model call
+        messages_before = list(self.history.messages)
         
-        # Check if we need to reduce the chat history before sending to the model
-        message_count = len(self.history.messages)
-        target_count = getattr(self.history, "target_count")
-        threshold = getattr(self.history, "threshold_count")
-        
-        # Show conversation stats to help understand truncation behavior
-        logging.debug(f"Current conversation: {message_count} messages (target: {target_count}, threshold: {threshold})")
-
-        logging.debug(f"message_count: {message_count}, target_count: {target_count}, threshold: {threshold}")
-
-        # Trigger truncation if we're approaching the limit
-        if message_count > (target_count + threshold):
-            logging.debug(f"Message count ({message_count}) exceeds limit ({target_count + threshold})")
-            logging.debug("\nTruncating chat history...")
-            
-            try:
-                reduced_history = await self.history.reduce()
-                
-                if reduced_history:
-                    logging.debug(f"History reduced from {message_count} to {len(reduced_history.messages)} messages")
-            except Exception as e:
-                logging.debug(f"Error during truncation: {str(e)}")
-
         # Wait for a response from the model
         result = await self.chat_completion.get_chat_message_content(
             chat_history=self.history,
@@ -624,27 +624,34 @@ class LogAgent:
             kernel=self.kernel,
         )
 
+        after = len(self.history.messages)
+        
+        # Print new messages that were added during the model call
+        if after > before:
+            print(f"\n--- {after - before} new messages added during model call ---")
+            new_messages = self.history.messages[before:]
+            for i, msg in enumerate(new_messages, 1):
+                print(f"New message {i}:")
+                print(f"  Role: {getattr(msg, 'role', 'unknown')}")
+                print(f"  Content: {str(msg)[:200]}{'...' if len(str(msg)) > 200 else ''}")
+                print()
+        elif after < before:
+            print(f"\n--- {before - after} messages were removed during model call (history reduction) ---")
+        else:
+            print(f"\n--- No messages added during model call ---")
+
+
         print("\nAssistant > " + str(result))
         self.history.add_message(result)
-        
-        # Check if we need to reduce the chat history after getting the model's response
-        message_count = len(self.history.messages)
-        target_count = getattr(self.history, "target_count")
-        threshold = getattr(self.history, "threshold_count")
+        # self.history.add_message_async(result, role="assistant", encoding="utf-8")
 
-        print(f"\nPost-response message count: {message_count} (target: {target_count}, threshold: {threshold})")
+        print(f"after: {after}")
+
         
-        # If we're over the target but under threshold, preemptively reduce to maintain responsiveness
-        if message_count > target_count:
-            logging.debug(f"Post-response: Message count ({message_count}) exceeds target ({target_count})")
-            try:
-                reduced_history = await self.history.reduce()
-                
-                if reduced_history:
-                    logging.debug(f"History reduced from {message_count} to {len(reduced_history.messages)} messages")
-                    print(f"Chat history reduced to {len(reduced_history.messages)} messages after response.")
-            except Exception as e:
-                logging.debug(f"Error during post-response truncation: {str(e)}")
+        print(f"Chat history length after adding assistant response: {len(self.history.messages)}")
+        # print(f"Chat history messages: {self.history.messages}")
+        
+        # print(f"final history messages: {self.history.messages}")
 
         print("-----------------------\n")
 

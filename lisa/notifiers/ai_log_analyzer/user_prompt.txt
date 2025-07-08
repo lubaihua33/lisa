@@ -1,9 +1,9 @@
 Please search and troubleshoot this error in the logs: {error_message}.
 
 For a comprehensive analysis:
-1. Use the search_error function to analyze all logs including LISA logs and serial console logs
-2. If you need detailed serial log analysis, use the search_serial_logs function for thorough examination of OS and kernel issues
-3. Pay special attention to serial logs when the error might involve OS provisioning, kernel panics, or boot failures
+1. ALWAYS use the search_serial_logs function to thoroughly analyze any serial console logs for OS and kernel issues
+2. Pay special attention to serial logs when the error might involve OS provisioning, kernel panics, or boot failures
+3. Check LISA logs for the error context and execution flow
 4. Look for serial logs in:
    - Any folders I've explicitly provided for analysis
    - Environment folders identified by the name column in environment_stats.log
@@ -16,6 +16,9 @@ For a comprehensive analysis:
    - Service startup failures
    - Network configuration problems
 6. Correlate issues between serial logs and LISA logs to understand the full failure scenario
-7. Provide detailed troubleshooting steps based on all available evidence
+7. Provide detailed troubleshooting steps based on all available evidence.
+
+## IMPORTANT THINGS TO NOTE
+- NEVER suggest high-cost troubleshooting steps unless all lower-cost options have been exhausted or explicitly ruled out, like reproducing an error
 
 Remember that serial console logs often contain the root cause of failures that aren't visible in other logs. For OS-level or kernel-related issues, serial logs are the most important source of diagnostic information.
