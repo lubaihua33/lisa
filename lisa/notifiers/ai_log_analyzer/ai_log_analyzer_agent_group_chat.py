@@ -7,21 +7,34 @@ import json
 import sys
 from enum import Enum
 from rapidfuzz import fuzz
-from typing import List
+from typing import List, TYPE_CHECKING, ClassVar
 from dataclasses import dataclass
 from dotenv import load_dotenv
+from pydantic import Field, BaseModel
 from semantic_kernel import Kernel
 from semantic_kernel.utils.logging import setup_logging
+from semantic_kernel.utils.feature_stage_decorator import experimental
 from semantic_kernel.functions import kernel_function, KernelArguments
 from semantic_kernel.agents import ChatCompletionAgent, AgentGroupChat
+from semantic_kernel.agents.strategies.selection.selection_strategy import SelectionStrategy
+from semantic_kernel.agents.strategies.termination.termination_strategy import TerminationStrategy
 from semantic_kernel.contents import AuthorRole, ChatMessageContent
 from semantic_kernel.connectors.ai.function_choice_behavior import FunctionChoiceBehavior
-from semantic_kernel.connectors.ai.open_ai import AzureChatCompletion
+from semantic_kernel.connectors.ai.chat_completion_client_base import ChatCompletionClientBase
+from semantic_kernel.connectors.ai.open_ai import (
+    AzureChatPromptExecutionSettings,
+    AzureChatCompletion,
+    OpenAIChatCompletion,
+)
 from semantic_kernel.contents.chat_history import ChatHistory
 from semantic_kernel.connectors.ai.open_ai.prompt_execution_settings.azure_chat_prompt_execution_settings import (
     AzureChatPromptExecutionSettings,
 )
 from log_analyzer_agent_base import LogAnalyzerAgentBase, AIServices
+
+if TYPE_CHECKING:
+    from semantic_kernel.agents import Agent
+    from semantic_kernel.contents.chat_message_content import ChatMessageContent
 
 load_dotenv()
 
@@ -504,19 +517,20 @@ class InputPath:
 
 
 ## Group Chat Orchestration Strategies
-class LogAnalyzerSelectionStrategy:
+@experimental
+@experimental
+class LogAnalyzerSelectionStrategy(SelectionStrategy):
     """An intelligent selection strategy that orchestrates log analysis workflow."""
 
-    NUM_OF_RETRIES: int = 3
+    NUM_OF_RETRIES: ClassVar[int] = 3
+    
+    chat_completion_service: ChatCompletionClientBase = Field(default_factory=lambda: AzureChatCompletion(
+        deployment_name="gpt-4o",
+        api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+        base_url=os.getenv("AZURE_OPENAI_ENDPOINT"),
+    ))
 
-    def __init__(self):
-        self.chat_completion_service = AzureChatCompletion(
-            deployment_name="gpt-4o",
-            api_key=os.getenv("AZURE_OPENAI_API_KEY"),
-            base_url=os.getenv("AZURE_OPENAI_ENDPOINT"),
-        )
-
-    async def next(self, agents: List[ChatCompletionAgent], history: List[ChatMessageContent]) -> ChatCompletionAgent:
+    async def select_agent(self, agents: List["Agent"], history: List["ChatMessageContent"]) -> "Agent":
         """Select the next agent to interact with using intelligent workflow orchestration.
 
         Args:
@@ -558,7 +572,7 @@ class LogAnalyzerSelectionStrategy:
 
         raise ValueError("Failed to select an agent since the model did not return a valid index")
 
-    def get_system_message(self, agents: List[ChatCompletionAgent]) -> str:
+    def get_system_message(self, agents: List["Agent"]) -> str:
         """Generate system message for intelligent log analysis workflow orchestration."""
         NEWLINE = "\n"
         agent_list = NEWLINE.join(f"[{index}] {agent.name}:{NEWLINE}{agent.description}" for index, agent in enumerate(agents))
@@ -610,24 +624,24 @@ Only return the index as an integer.
 """
 
 
-class LogAnalyzerTerminationStrategy:
+@experimental
+class LogAnalyzerTerminationStrategy(TerminationStrategy):
     """An intelligent termination strategy for log analysis group chat."""
     
-    NUM_OF_RETRIES: int = 3
-    max_turns: int = 8  # Increased for thorough analysis
+    NUM_OF_RETRIES: ClassVar[int] = 3
+    maximum_iterations: int = 8  # Increased for thorough analysis
     
-    def __init__(self):
-        self.chat_completion_service = AzureChatCompletion(
-            deployment_name="gpt-4o",
-            api_key=os.getenv("AZURE_OPENAI_API_KEY"),
-            base_url=os.getenv("AZURE_OPENAI_ENDPOINT"),
-        )
+    chat_completion_service: ChatCompletionClientBase = Field(default_factory=lambda: AzureChatCompletion(
+        deployment_name="gpt-4o",
+        api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+        base_url=os.getenv("AZURE_OPENAI_ENDPOINT"),
+    ))
     
-    async def should_terminate(self, agents: List[ChatCompletionAgent], history: List[ChatMessageContent]) -> bool:
+    async def should_agent_terminate(self, agent: "Agent", history: List["ChatMessageContent"]) -> bool:
         """Determine if the log analysis should terminate using LLM intelligence.
         
         Args:
-            agents: The list of agents in the chat.
+            agent: The agent to check (not used in group chat context).
             history: The history of messages in the conversation.
             
         Returns:
@@ -639,7 +653,7 @@ class LogAnalyzerTerminationStrategy:
             return False
             
         # Hard limit to prevent infinite loops
-        if len(agent_responses) >= self.max_turns:
+        if len(agent_responses) >= self.maximum_iterations:
             return True
         
         # Use LLM to make intelligent termination decision
@@ -679,7 +693,7 @@ class LogAnalyzerTerminationStrategy:
                 )
         
         # Fallback: if LLM doesn't give clear answer, continue unless at max turns
-        return len(agent_responses) >= self.max_turns
+        return len(agent_responses) >= self.maximum_iterations
     
     def get_system_message(self) -> str:
         """Generate system message for intelligent termination assessment."""
@@ -869,18 +883,7 @@ async def main():
                 termination_strategy=LogAnalyzerTerminationStrategy(),
             )
 
-            # Give the planner some system instructions by reading from a text file
-            group_chat_instructions_path = os.path.join(working_directory, "prompts", "group_chat_instructions.txt")
-            with open(group_chat_instructions_path, 'r') as f:
-                group_chat_instructions = f.read().strip()
-            await group_chat.add_chat_message(
-                ChatMessageContent(
-                    role=AuthorRole.SYSTEM,
-                    content=group_chat_instructions,
-                )
-            )
-
-            # Add the user analysis request
+            # Add the user analysis request directly (no system message needed)
             await group_chat.add_chat_message(
                 ChatMessageContent(
                     role=AuthorRole.USER,

@@ -246,33 +246,16 @@ def setup_debug_logging():
     formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     file_handler.setFormatter(formatter)
 
-    # Create console handler for INFO and above
-    # console_handler = logging.StreamHandler()
-    # console_handler.setLevel(logging.INFO)
-    # console_handler.setFormatter(formatter)
-
     # Remove any existing handlers except the file handler
     for handler in logging.getLogger().handlers[:]:
         logging.getLogger().removeHandler(handler)
     
     # Add both file and console handlers
     logging.getLogger().addHandler(file_handler)
-    # logging.getLogger().addHandler(console_handler)
     
     # Add verbosity filter to truncate verbose messages
     verbosity_filter = VerbosityFilter()
     logging.getLogger().addFilter(verbosity_filter)
-    
-    # # Enable detailed logging for Semantic Kernel components
-    # logging.getLogger("semantic_kernel").setLevel(logging.DEBUG)
-    # logging.getLogger("semantic_kernel.connectors").setLevel(logging.DEBUG)
-    # logging.getLogger("semantic_kernel.connectors.ai").setLevel(logging.DEBUG)
-    # logging.getLogger("semantic_kernel.connectors.ai.open_ai").setLevel(logging.DEBUG)
-    
-    # # Enable HTTP request logging to capture all LLM requests
-    # logging.getLogger("httpcore").setLevel(logging.DEBUG)
-    # logging.getLogger("httpx").setLevel(logging.DEBUG)
-    # logging.getLogger("openai").setLevel(logging.DEBUG)
     
     logging.info(f"Debug logging configured. Writing to: {tracing_filepath}")
 
@@ -484,6 +467,9 @@ class LisaErrorAnalyzerPlugin:
         return files
     
 
+
+
+
 ## Path input structure
 @dataclass
 class InputPath:
@@ -548,11 +534,11 @@ class LogAgent:
     #         plugin_name: The name to register the memory plugin under
     #     """
     #     # Initialize text embedding service if not already done
-    #     self.text_embedding = OpenAITextEmbedding(
-    #         ai_model_id="text-embedding-ada-002",
-    #         api_key=os.getenv("AZURE_OPENAI_API_KEY"),
-    #     )
-    #     self.kernel.add_service(self.text_embedding)
+    #     # self.text_embedding = OpenAITextEmbedding(
+    #     #     ai_model_id="text-embedding-ada-002",
+    #     #     api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+    #     # )
+    #     # self.kernel.add_service(self.text_embedding)
         
         
     #     # Create semantic text memory with the store and embedding service
@@ -654,6 +640,8 @@ class LogAgent:
         # print(f"final history messages: {self.history.messages}")
 
         print("-----------------------\n")
+        
+        return str(result)
 
 
 async def main():
