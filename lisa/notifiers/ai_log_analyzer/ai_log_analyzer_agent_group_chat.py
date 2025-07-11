@@ -13,11 +13,27 @@ from dotenv import load_dotenv
 from semantic_kernel import Kernel
 from semantic_kernel.utils.logging import setup_logging
 from semantic_kernel.functions import kernel_function, KernelArguments
-from semantic_kernel.agents import ChatCompletionAgent
+from semantic_kernel.agents import ChatCompletionAgent, AgentGroupChat
+from semantic_kernel.contents import AuthorRole, ChatMessageContent
 from semantic_kernel.connectors.ai.function_choice_behavior import FunctionChoiceBehavior
 from semantic_kernel.connectors.ai.open_ai import AzureChatCompletion
+from semantic_kernel.contents.chat_history import ChatHistory
+from semantic_kernel.connectors.ai.open_ai.prompt_execution_settings.azure_chat_prompt_execution_settings import (
+    AzureChatPromptExecutionSettings,
+)
+from log_analyzer_agent_base import LogAnalyzerAgentBase, AIServices
 
 load_dotenv()
+
+# Validate required environment variables
+required_env_vars = ["AZURE_OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT"]
+missing_vars = [var for var in required_env_vars if not os.getenv(var)]
+if missing_vars:
+    raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
+
+# Constants for termination strategy responses
+TERMINATE_TRUE_KEYWORD = "yes"
+TERMINATE_FALSE_KEYWORD = "no"
 
 
 ## Constants and Enums
@@ -486,71 +502,300 @@ class InputPath:
     # Represents the path to the file
     value: str
 
-def create_chat_completion_agent(url: str, key: str, name: str, description: str, instructions: str = None):
-    """Create a ChatCompletionAgent with the specified configuration."""
-    # Create chat completion service for the agent
-    chat_completion = AzureChatCompletion(
-        deployment_name="gpt-4o",
-        api_key=key,
-        base_url=url,
-    )
-    
-    # Create and return the agent
-    agent = ChatCompletionAgent(
-        service=chat_completion,
-        name=name,
-        description=description,
-        instructions=instructions,
-        plugins=[LisaErrorAnalyzerPlugin()]
-    )
-    
-    return agent
+
+## Group Chat Orchestration Strategies
+class LogAnalyzerSelectionStrategy:
+    """An intelligent selection strategy that orchestrates log analysis workflow."""
+
+    NUM_OF_RETRIES: int = 3
+
+    def __init__(self):
+        self.chat_completion_service = AzureChatCompletion(
+            deployment_name="gpt-4o",
+            api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+            base_url=os.getenv("AZURE_OPENAI_ENDPOINT"),
+        )
+
+    async def next(self, agents: List[ChatCompletionAgent], history: List[ChatMessageContent]) -> ChatCompletionAgent:
+        """Select the next agent to interact with using intelligent workflow orchestration.
+
+        Args:
+            agents: The list of agents to select from.
+            history: The history of messages in the conversation.
+
+        Returns:
+            The next agent to interact with.
+        """
+        if len(agents) == 0:
+            raise ValueError("No agents to select from")
+
+        chat_history = ChatHistory(system_message=self.get_system_message(agents).strip())
+
+        for message in history:
+            content = message.content
+            # We don't want to add messages whose text content is empty.
+            # Those messages are likely messages from function calls and function results.
+            if content:
+                chat_history.add_message(message)
+
+        chat_history.add_user_message("Now follow the rules and select the next agent by typing the agent's index.")
+
+        for _ in range(self.NUM_OF_RETRIES):
+            completion = await self.chat_completion_service.get_chat_message_content(
+                chat_history,
+                AzureChatPromptExecutionSettings(temperature=0.1),  # Lower temperature for more consistent decisions
+            )
+
+            if completion is None:
+                continue
+
+            try:
+                return agents[int(completion.content)]
+            except ValueError as ex:
+                chat_history.add_message(completion)
+                chat_history.add_user_message(str(ex))
+                chat_history.add_user_message(f"You must only say a number between 0 and {len(agents) - 1}.")
+
+        raise ValueError("Failed to select an agent since the model did not return a valid index")
+
+    def get_system_message(self, agents: List[ChatCompletionAgent]) -> str:
+        """Generate system message for intelligent log analysis workflow orchestration."""
+        NEWLINE = "\n"
+        agent_list = NEWLINE.join(f"[{index}] {agent.name}:{NEWLINE}{agent.description}" for index, agent in enumerate(agents))
+        max_agent_index = len(agents) - 1
+        
+        return f"""
+You are orchestrating a multi-agent log analysis workflow to diagnose errors in LISA test systems.
+Each message in the chat history contains the agent's name and the message content.
+
+Initially, the chat history may be empty.
+
+Here are the agents with their indices, names, and descriptions:
+{agent_list}
+
+Your task is to select the next agent based on the conversation history and follow this intelligent workflow:
+
+**WORKFLOW RULES:**
+1. **START WITH LOG SEARCH**: Always begin with LogSearchAgent (index 0) to search logs and identify error patterns, tracebacks, and context.
+
+2. **TRANSITION TO CODE ANALYSIS**: Once LogSearchAgent has found errors and identified file paths in tracebacks, switch to CodeSearchAgent (index 1) to:
+   - Examine the specific source code files mentioned in the traceback
+   - Analyze the implementation logic that caused the error
+   - Understand the root cause from the code perspective
+
+3. **COLLABORATIVE ANALYSIS**: After both agents have provided initial findings:
+   - LogSearchAgent can provide additional log context based on code insights
+   - CodeSearchAgent can examine more related files if needed
+   - Continue until root cause is clearly identified
+
+4. **DECISION LOGIC**:
+   - If no analysis has started → Select LogSearchAgent (0)
+   - If logs have been searched but no code analysis → Select CodeSearchAgent (1)
+   - If traceback mentions file paths but code hasn't been examined → Select CodeSearchAgent (1)
+   - If both have contributed but more log context needed → Select LogSearchAgent (0)
+   - If both have contributed but more code analysis needed → Select CodeSearchAgent (1)
+
+**CONTEXT CLUES TO LOOK FOR:**
+- "Found error in logs" → Time to examine code
+- "Traceback shows file:" → Need CodeSearchAgent
+- "File path:", "line number" → Need CodeSearchAgent
+- "Need more log context" → Use LogSearchAgent
+- "Root cause identified" → Analysis may be complete
+- Function calls and file references → Signals need for code analysis
+
+**GOAL**: Create a comprehensive analysis by having LogSearchAgent find the error context in logs, then CodeSearchAgent examine the actual code implementation to identify root causes.
+
+Respond with a single number between 0 and {max_agent_index}, representing the agent's index.
+Only return the index as an integer.
+"""
 
 
-class LogSearchAgent:
-    def __init__(self, url: str, key: str):
-        system_prompt_path = os.path.join(working_directory, "prompts", "log_search_system_prompt.txt")
-        with open(system_prompt_path, 'r') as f:
-            instructions = f.read().strip()
+class LogAnalyzerTerminationStrategy:
+    """An intelligent termination strategy for log analysis group chat."""
+    
+    NUM_OF_RETRIES: int = 3
+    max_turns: int = 8  # Increased for thorough analysis
+    
+    def __init__(self):
+        self.chat_completion_service = AzureChatCompletion(
+            deployment_name="gpt-4o",
+            api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+            base_url=os.getenv("AZURE_OPENAI_ENDPOINT"),
+        )
+    
+    async def should_terminate(self, agents: List[ChatCompletionAgent], history: List[ChatMessageContent]) -> bool:
+        """Determine if the log analysis should terminate using LLM intelligence.
+        
+        Args:
+            agents: The list of agents in the chat.
+            history: The history of messages in the conversation.
             
-        self._agent = create_chat_completion_agent(
-            url=url,
-            key=key,
+        Returns:
+            True if the analysis should terminate, False otherwise.
+        """
+        # Always allow at least 2 turns (one for each agent minimum)
+        agent_responses = [msg for msg in history if msg.role == AuthorRole.ASSISTANT]
+        if len(agent_responses) < 2:
+            return False
+            
+        # Hard limit to prevent infinite loops
+        if len(agent_responses) >= self.max_turns:
+            return True
+        
+        # Use LLM to make intelligent termination decision
+        chat_history = ChatHistory(system_message=self.get_system_message().strip())
+        
+        # Add conversation history (excluding function call messages)
+        for message in history:
+            if message.content:  # Skip empty function call messages
+                chat_history.add_message(message)
+        
+        chat_history.add_user_message(
+            "Based on the conversation above, has the log analysis reached a satisfactory conclusion? "
+            "Answer with 'yes' if the root cause has been identified and sufficient analysis provided, "
+            "or 'no' if more investigation is needed."
+        )
+        
+        for _ in range(self.NUM_OF_RETRIES):
+            completion = await self.chat_completion_service.get_chat_message_content(
+                chat_history,
+                AzureChatPromptExecutionSettings(temperature=0.1),
+            )
+            
+            if completion is None:
+                continue
+                
+            response_lower = completion.content.lower().strip()
+            
+            if TERMINATE_TRUE_KEYWORD in response_lower and TERMINATE_FALSE_KEYWORD not in response_lower:
+                return True
+            elif TERMINATE_FALSE_KEYWORD in response_lower and TERMINATE_TRUE_KEYWORD not in response_lower:
+                return False
+            else:
+                # Ask for clarification
+                chat_history.add_message(completion)
+                chat_history.add_user_message(
+                    f"Please answer clearly with either '{TERMINATE_TRUE_KEYWORD}' (terminate) or '{TERMINATE_FALSE_KEYWORD}' (continue analysis)."
+                )
+        
+        # Fallback: if LLM doesn't give clear answer, continue unless at max turns
+        return len(agent_responses) >= self.max_turns
+    
+    def get_system_message(self) -> str:
+        """Generate system message for intelligent termination assessment."""
+        return """
+You are evaluating whether a log analysis conversation has reached a satisfactory conclusion.
+
+A good log analysis should include:
+1. **Error Identification**: Clear identification of the error from logs
+2. **Log Context**: Relevant log entries showing when and where the error occurred
+3. **Traceback Analysis**: Understanding of the call stack that led to the error
+4. **Code Examination**: Analysis of the actual source code that caused the issue
+5. **Root Cause**: Clear explanation of why the error occurred
+6. **Actionable Insights**: Understanding of what needs to be fixed
+
+The analysis is COMPLETE when:
+- Both log search and code analysis have been performed
+- Root cause has been clearly identified
+- There's sufficient detail to understand and fix the issue
+
+The analysis is INCOMPLETE when:
+- Only logs OR only code has been examined (need both)
+- Error found but root cause unclear
+- Traceback mentioned but code not examined
+- Generic error messages without specific context
+- More investigation would clearly help
+
+Review the conversation and determine if the analysis provides sufficient insight to understand and resolve the error.
+"""
+
+
+class LogSearchAgent(LogAnalyzerAgentBase):
+    """
+    Specialized agent for searching and analyzing log files.
+    
+    This agent focuses on:
+    - LISA log format parsing and analysis
+    - Error pattern detection in standard and serial console logs
+    - Fuzzy matching for error message identification
+    - Timeline reconstruction and context extraction
+    """
+    
+    def __init__(self, url: str = None, key: str = None):
+        # Load specialized system prompt for log search
+        instructions = self._load_system_prompt("log_search_system_prompt.txt")
+        
+        # Initialize with Azure OpenAI service and log analysis plugin
+        super().__init__(
+            service=self._create_ai_service(),
             name="LogSearchAgent",
             description="Searches and analyzes log files for error patterns and diagnostic information.",
-            instructions=instructions
+            instructions=instructions,
+            plugins=[LisaErrorAnalyzerPlugin()]
         )
         
-        setup_debug_logging()
-    
-    async def invoke(self, prompt: str) -> str:
-        """Invoke the log search agent with a prompt and return the response."""
-        async for response in self._agent.invoke(messages=prompt):
-            return response.content
-        return "No response generated"
-
-
-class CodeSearchAgent:
-    def __init__(self, url: str, key: str):
-        system_prompt_path = os.path.join(working_directory, "prompts", "code_search_system_prompt.txt")
-        with open(system_prompt_path, 'r') as f:
-            instructions = f.read().strip()
+    async def invoke(self, prompt: str, log_folder_path: str = None, **kwargs) -> str:
+        """
+        Invoke the log search agent with automatic context injection.
+        
+        Args:
+            prompt: The analysis request or question.
+            log_folder_path: Path to the log directory to analyze.
+            **kwargs: Additional arguments passed to the base invoke method.
             
-        self._agent = create_chat_completion_agent(
-            url=url,
-            key=key,
+        Returns:
+            str: The agent's analysis response.
+        """
+        return await self.invoke_simple(
+            prompt, 
+            log_folder_path=log_folder_path,
+            additional_context="Focus on log file analysis and error pattern detection.",
+            **kwargs
+        )
+
+
+class CodeSearchAgent(LogAnalyzerAgentBase):
+    """
+    Specialized agent for examining source code and implementations.
+    
+    This agent focuses on:
+    - Source code analysis related to log errors
+    - Traceback parsing and file mapping
+    - Implementation logic understanding
+    - Code-to-error correlation analysis
+    """
+    
+    def __init__(self, url: str = None, key: str = None):
+        # Load specialized system prompt for code search
+        instructions = self._load_system_prompt("code_search_system_prompt.txt")
+        
+        # Initialize with Azure OpenAI service and log analysis plugin
+        super().__init__(
+            service=self._create_ai_service(),
             name="CodeSearchAgent", 
             description="Examines source code files and analyzes implementations related to errors.",
-            instructions=instructions
+            instructions=instructions,
+            plugins=[LisaErrorAnalyzerPlugin()]
         )
         
-        setup_debug_logging()
-    
-    async def invoke(self, prompt: str) -> str:
-        """Invoke the code search agent with a prompt and return the response."""
-        async for response in self._agent.invoke(messages=prompt):
-            return response.content
-        return "No response generated"
+    async def invoke(self, prompt: str, code_path: str = None, **kwargs) -> str:
+        """
+        Invoke the code search agent with automatic context injection.
+        
+        Args:
+            prompt: The analysis request or question.
+            code_path: Path to the code repository to analyze.
+            **kwargs: Additional arguments passed to the base invoke method.
+            
+        Returns:
+            str: The agent's analysis response.
+        """
+        return await self.invoke_simple(
+            prompt,
+            code_path=code_path,
+            additional_context="Focus on source code analysis and implementation understanding.",
+            **kwargs
+        )
 
 
 async def main():
@@ -558,22 +803,13 @@ async def main():
     Main function that orchestrates a simple multi-agent log analysis workflow.
     
     Uses specialized agents to analyze LISA test errors by combining log analysis 
-    and code inspection capabilities.
+    and code inspection capabilities. Demonstrates both direct agent invocation 
+    and group chat orchestration.
     """
-    print("The agents are starting up...")
-
-    # Create specialized agents
-    log_search_agent = LogSearchAgent(
-        url=os.getenv("AZURE_OPENAI_ENDPOINT"),
-        key=os.getenv("AZURE_OPENAI_API_KEY"),
-    )
+    # Set up debug logging for all Semantic Kernel operations
+    setup_debug_logging()
     
-    code_search_agent = CodeSearchAgent(
-        url=os.getenv("AZURE_OPENAI_ENDPOINT"),
-        key=os.getenv("AZURE_OPENAI_API_KEY"),
-    )
-
-    print("The agents are ready!")
+    print("The agents are starting up...")
 
     # Load test case and set up paths
     test_index = 8
@@ -586,6 +822,15 @@ async def main():
         log_folder_path = os.path.join(root_path, test_data['path'])
         code_path = "C:/Users/t-linm/Documents/lisa-fork"
         
+        # Validate paths exist
+        if not os.path.exists(log_folder_path):
+            print(f"Warning: Log folder path does not exist: {log_folder_path}")
+            print("This may cause issues during log analysis.")
+        
+        if not os.path.exists(code_path):
+            print(f"Warning: Code path does not exist: {code_path}")
+            print("This may cause issues during code analysis.")
+        
         # Create analysis prompt
         error_message = test_data['error_message']
         analysis_prompt = f"""I need to analyze this error from LISA tests: "{error_message}"
@@ -597,22 +842,115 @@ async def main():
         Please identify the root cause of this error and provide an analysis.
         """
         
-        print("\nStarting analysis. Please wait...\n")
+        print("\nStarting analysis...\n")
+
+        # Create specialized agents using the custom base class
+        try:
+            log_search_agent = LogSearchAgent()
+            code_search_agent = CodeSearchAgent()
+            print("The agents are ready!")
+        except Exception as e:
+            print(f"Error initializing agents: {e}")
+            logging.error(f"Agent initialization failed: {e}", exc_info=True)
+            return
+
         
-        # Use log search agent for analysis
-        print("=== Log Search Agent Analysis ===")
-        log_result = await log_search_agent.invoke(analysis_prompt)
-        print(log_result)
+        # Method 2: Group Chat Orchestration (Optional - can be enabled for more complex scenarios)
+        USE_GROUP_CHAT = True  # Set to True to enable group chat orchestration
         
-        # Use code search agent for analysis  
-        print("\n=== Code Search Agent Analysis ===")
-        code_result = await code_search_agent.invoke(analysis_prompt)
-        print(code_result)
-        
+        if USE_GROUP_CHAT:
+            print("\n=== Method 1: Group Chat Orchestration ===")
+            
+            # Create group chat with agents first
+            agents = [log_search_agent, code_search_agent]
+            group_chat = AgentGroupChat(
+                agents=agents,
+                selection_strategy=LogAnalyzerSelectionStrategy(),
+                termination_strategy=LogAnalyzerTerminationStrategy(),
+            )
+
+            # Give the planner some system instructions by reading from a text file
+            group_chat_instructions_path = os.path.join(working_directory, "prompts", "group_chat_instructions.txt")
+            with open(group_chat_instructions_path, 'r') as f:
+                group_chat_instructions = f.read().strip()
+            await group_chat.add_chat_message(
+                ChatMessageContent(
+                    role=AuthorRole.SYSTEM,
+                    content=group_chat_instructions,
+                )
+            )
+
+            # Add the user analysis request
+            await group_chat.add_chat_message(
+                ChatMessageContent(
+                    role=AuthorRole.USER,
+                    content=analysis_prompt,
+                )
+            )
+            
+            # Start streaming group chat conversation
+            print("Starting collaborative analysis with group chat...")
+            print("Agents will work together to provide a comprehensive analysis...\n")
+            
+            async for response in group_chat.invoke():
+                print(f"==== {response.name} ====")
+                print(response.content)
+                print()  # Add spacing between responses
+            
+            # Collect the final cohesive analysis from the conversation
+            print("\n=== Generating Final Cohesive Analysis ===")
+            
+            # Get the complete conversation history
+            conversation_history: list[ChatMessageContent] = []
+            async for message in group_chat.get_chat_messages():
+                conversation_history.append(message)
+            
+            # Extract the most comprehensive analysis (usually the last few agent responses)
+            agent_analyses = []
+            for message in reversed(conversation_history):  # Reverse to get most recent first
+                if message.role == AuthorRole.ASSISTANT and message.content.strip():
+                    agent_analyses.append({
+                        'agent': message.name,
+                        'content': message.content
+                    })
+                    if len(agent_analyses) >= 2:  # Get last response from each agent
+                        break
+            
+            print("=== Final Collaborative Analysis ===")
+            if agent_analyses:
+                print("Combined insights from LogSearchAgent and CodeSearchAgent:\n")
+                for analysis in reversed(agent_analyses):  # Show in chronological order
+                    print(f"--- {analysis['agent']} Analysis ---")
+                    print(analysis['content'])
+                    print()
+            else:
+                print("No analysis results found in conversation history.")
+        else:
+            print("\n=== Method 2: Direct agent invocation ===")
+            # Use log search agent for analysis
+            print("--- Log Search Agent Analysis ---")
+            log_result = await log_search_agent.invoke(
+                prompt=analysis_prompt,
+                log_folder_path=log_folder_path
+            )
+            print(log_result)
+            
+            # Use code search agent for analysis  
+            print("\n--- Code Search Agent Analysis ---")
+            code_result = await code_search_agent.invoke(
+                prompt=analysis_prompt,
+                code_path=code_path
+            )
+            print(code_result)
+
         print("\n=== Analysis Complete ===")
         
     except (FileNotFoundError, IndexError, ValueError) as e:
         print(f"Error loading test data: {e}")
+        return
+    except Exception as e:
+        print(f"Unexpected error during analysis: {e}")
+        logging.error(f"Analysis failed with error: {e}", exc_info=True)
         return
 
 
