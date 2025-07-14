@@ -416,7 +416,7 @@ class LisaErrorAnalyzerPlugin:
                     continue  # Skip non-log files
                     
                 try:
-                    with open(file_path, 'r') as f:
+                    with open(file_path, 'r', encoding='utf-8') as f:
                         for i, line in enumerate(f, start=1):
                             # Process standard logs
                             if is_standard_log and not is_serial_log:
@@ -473,7 +473,7 @@ class LisaErrorAnalyzerPlugin:
         if os.path.exists(norm_path):
             traceback_start = max(0, start_line_offset )
             traceback_end = traceback_start + line_count
-            with open(norm_path, 'r') as f:
+            with open(norm_path, 'r', encoding='utf-8') as f:
                 for i, line in enumerate(f, start=1):
                     if traceback_start <= i <= traceback_end:
                         traceback.append(f"({i}): {line.rstrip()}")
@@ -747,25 +747,6 @@ class LogSearchAgent(LogAnalyzerAgentBase):
             instructions=instructions,
             plugins=[LisaErrorAnalyzerPlugin()]
         )
-        
-    async def invoke(self, prompt: str, log_folder_path: str = None, **kwargs) -> str:
-        """
-        Invoke the log search agent with automatic context injection.
-        
-        Args:
-            prompt: The analysis request or question.
-            log_folder_path: Path to the log directory to analyze.
-            **kwargs: Additional arguments passed to the base invoke method.
-            
-        Returns:
-            str: The agent's analysis response.
-        """
-        return await self.invoke_simple(
-            prompt, 
-            log_folder_path=log_folder_path,
-            additional_context="Focus on log file analysis and error pattern detection.",
-            **kwargs
-        )
 
 
 class CodeSearchAgent(LogAnalyzerAgentBase):
@@ -791,25 +772,6 @@ class CodeSearchAgent(LogAnalyzerAgentBase):
             instructions=instructions,
             plugins=[LisaErrorAnalyzerPlugin()]
         )
-        
-    async def invoke(self, prompt: str, code_path: str = None, **kwargs) -> str:
-        """
-        Invoke the code search agent with automatic context injection.
-        
-        Args:
-            prompt: The analysis request or question.
-            code_path: Path to the code repository to analyze.
-            **kwargs: Additional arguments passed to the base invoke method.
-            
-        Returns:
-            str: The agent's analysis response.
-        """
-        return await self.invoke_simple(
-            prompt,
-            code_path=code_path,
-            additional_context="Focus on source code analysis and implementation understanding.",
-            **kwargs
-        )
 
 
 async def main():
@@ -817,8 +779,7 @@ async def main():
     Main function that orchestrates a simple multi-agent log analysis workflow.
     
     Uses specialized agents to analyze LISA test errors by combining log analysis 
-    and code inspection capabilities. Demonstrates both direct agent invocation 
-    and group chat orchestration.
+    and code inspection capabilities.
     """
     # Set up debug logging for all Semantic Kernel operations
     setup_debug_logging()
@@ -932,19 +893,26 @@ async def main():
             print("\n=== Method 2: Direct agent invocation ===")
             # Use log search agent for analysis
             print("--- Log Search Agent Analysis ---")
-            log_result = await log_search_agent.invoke(
-                prompt=analysis_prompt,
-                log_folder_path=log_folder_path
-            )
-            print(log_result)
+            
+            # Convert to ChatMessageContent for base class invoke method
+            from semantic_kernel.contents import ChatMessageContent, AuthorRole
+            user_message = ChatMessageContent(role=AuthorRole.USER, content=analysis_prompt)
+            
+            async for response in log_search_agent.invoke(
+                messages=[user_message],
+                log_folder_path=log_folder_path,
+                additional_context="Focus on log file analysis and error pattern detection."
+            ):
+                print(response.content)
             
             # Use code search agent for analysis  
             print("\n--- Code Search Agent Analysis ---")
-            code_result = await code_search_agent.invoke(
-                prompt=analysis_prompt,
-                code_path=code_path
-            )
-            print(code_result)
+            async for response in code_search_agent.invoke(
+                messages=[user_message],
+                code_path=code_path,
+                additional_context="Focus on source code analysis and implementation understanding."
+            ):
+                print(response.content)
 
         print("\n=== Analysis Complete ===")
         
