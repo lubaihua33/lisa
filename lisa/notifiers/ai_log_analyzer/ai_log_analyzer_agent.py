@@ -374,6 +374,9 @@ class LisaErrorAnalyzerPlugin:
                 
                 if not (is_standard_log or is_serial_log):
                     continue  # Skip non-log files
+
+                if is_serial_log:
+                    logging.debug(f"Processing serial log file: {file_path}")
                     
                 try:
                     with open(file_path, 'r') as f:
@@ -400,6 +403,7 @@ class LisaErrorAnalyzerPlugin:
                             # Process serial logs
                             elif is_serial_log:
                                 partial_similarity = fuzz.partial_ratio(line.strip().lower(), error_message.strip().lower())
+                                logging.debug(f"Partial similarity for {file_path} at line {i}: {partial_similarity}")
                                 if partial_similarity >= Thresholds.CONTEXT_THRESHOLD:
                                     log_context["serial_context"].append({
                                         'line_number': i,
@@ -662,7 +666,7 @@ async def main():
         print(f"\nLoading test case {test_data}")
         
         # Extract the log folder path from the test path
-        root_path = "C:\\Users\\t-linm\\Downloads\\log_analyzer_20250603\\log_analyzer_20250603"
+        root_path = "C:\\Users\\t-linm\\lisa\\lisa\\notifiers\\ai_log_analyzer\\test_logs\\log_analyzer_20250603"
         log_folder_path = os.path.join(root_path, test_data['path'])
         
         # Display chat history truncation configuration
@@ -675,7 +679,7 @@ async def main():
             error_message=test_data['error_message'],
             paths=[
                 InputPath(type="log", value=log_folder_path),
-                InputPath(type="code", value="C:/Users/t-linm/Documents/lisa-fork"),
+                InputPath(type="code", value="C:/Users/t-linm/lisa"),
             ]
         )
         

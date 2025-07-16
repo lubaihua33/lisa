@@ -38,6 +38,8 @@ if TYPE_CHECKING:
 
 load_dotenv()
 
+
+
 # Validate required environment variables
 required_env_vars = ["AZURE_OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT"]
 missing_vars = [var for var in required_env_vars if not os.getenv(var)]
@@ -263,8 +265,8 @@ def setup_debug_logging():
     setup_logging()
     logging.getLogger().setLevel(logging.DEBUG)
 
-    # Create file handler and format each log message
-    file_handler = logging.FileHandler(tracing_filepath)
+    # Create file handler and format each log message with UTF-8 encoding
+    file_handler = logging.FileHandler(tracing_filepath, encoding='utf-8')
     file_handler.setLevel(logging.DEBUG)
     formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     file_handler.setFormatter(formatter)
@@ -414,9 +416,12 @@ class LisaErrorAnalyzerPlugin:
                 
                 if not (is_standard_log or is_serial_log):
                     continue  # Skip non-log files
+
+                if is_serial_log:
+                    logging.debug(f"Processing serial log file: {file_path}")
                     
                 try:
-                    with open(file_path, 'r', encoding='utf-8') as f:
+                    with open(file_path, 'r') as f:
                         for i, line in enumerate(f, start=1):
                             # Process standard logs
                             if is_standard_log and not is_serial_log:
@@ -440,6 +445,7 @@ class LisaErrorAnalyzerPlugin:
                             # Process serial logs
                             elif is_serial_log:
                                 partial_similarity = fuzz.partial_ratio(line.strip().lower(), error_message.strip().lower())
+                                logging.debug(f"Partial similarity for {file_path} at line {i}: {partial_similarity}")
                                 if partial_similarity >= Thresholds.CONTEXT_THRESHOLD:
                                     log_context["serial_context"].append({
                                         'line_number': i,
@@ -518,7 +524,6 @@ class InputPath:
 
 ## Group Chat Orchestration Strategies
 @experimental
-@experimental
 class LogAnalyzerSelectionStrategy(SelectionStrategy):
     """An intelligent selection strategy that orchestrates log analysis workflow."""
 
@@ -574,54 +579,25 @@ class LogAnalyzerSelectionStrategy(SelectionStrategy):
 
     def get_system_message(self, agents: List["Agent"]) -> str:
         """Generate system message for intelligent log analysis workflow orchestration."""
+        # Load system prompt template from file
+        working_directory = os.path.dirname(os.path.realpath(__file__))
+        prompt_path = os.path.join(working_directory, "prompts", "log_analyzer_selection_system_prompt.txt")
+        
+        try:
+            with open(prompt_path, 'r', encoding='utf-8') as f:
+                system_prompt_template = f.read().strip()
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Selection system prompt file not found: {prompt_path}")
+        
+        # Format the template with agent information
         NEWLINE = "\n"
         agent_list = NEWLINE.join(f"[{index}] {agent.name}:{NEWLINE}{agent.description}" for index, agent in enumerate(agents))
         max_agent_index = len(agents) - 1
         
-        return f"""
-You are orchestrating a multi-agent log analysis workflow to diagnose errors in LISA test systems.
-Each message in the chat history contains the agent's name and the message content.
-
-Initially, the chat history may be empty.
-
-Here are the agents with their indices, names, and descriptions:
-{agent_list}
-
-Your task is to select the next agent based on the conversation history and follow this intelligent workflow:
-
-**WORKFLOW RULES:**
-1. **START WITH LOG SEARCH**: Always begin with LogSearchAgent (index 0) to search logs and identify error patterns, tracebacks, and context.
-
-2. **TRANSITION TO CODE ANALYSIS**: Once LogSearchAgent has found errors and identified file paths in tracebacks, switch to CodeSearchAgent (index 1) to:
-   - Examine the specific source code files mentioned in the traceback
-   - Analyze the implementation logic that caused the error
-   - Understand the root cause from the code perspective
-
-3. **COLLABORATIVE ANALYSIS**: After both agents have provided initial findings:
-   - LogSearchAgent can provide additional log context based on code insights
-   - CodeSearchAgent can examine more related files if needed
-   - Continue until root cause is clearly identified
-
-4. **DECISION LOGIC**:
-   - If no analysis has started → Select LogSearchAgent (0)
-   - If logs have been searched but no code analysis → Select CodeSearchAgent (1)
-   - If traceback mentions file paths but code hasn't been examined → Select CodeSearchAgent (1)
-   - If both have contributed but more log context needed → Select LogSearchAgent (0)
-   - If both have contributed but more code analysis needed → Select CodeSearchAgent (1)
-
-**CONTEXT CLUES TO LOOK FOR:**
-- "Found error in logs" → Time to examine code
-- "Traceback shows file:" → Need CodeSearchAgent
-- "File path:", "line number" → Need CodeSearchAgent
-- "Need more log context" → Use LogSearchAgent
-- "Root cause identified" → Analysis may be complete
-- Function calls and file references → Signals need for code analysis
-
-**GOAL**: Create a comprehensive analysis by having LogSearchAgent find the error context in logs, then CodeSearchAgent examine the actual code implementation to identify root causes.
-
-Respond with a single number between 0 and {max_agent_index}, representing the agent's index.
-Only return the index as an integer.
-"""
+        return system_prompt_template.format(
+            agent_list=agent_list,
+            max_agent_index=max_agent_index
+        )
 
 
 @experimental
@@ -697,31 +673,15 @@ class LogAnalyzerTerminationStrategy(TerminationStrategy):
     
     def get_system_message(self) -> str:
         """Generate system message for intelligent termination assessment."""
-        return """
-You are evaluating whether a log analysis conversation has reached a satisfactory conclusion.
-
-A good log analysis should include:
-1. **Error Identification**: Clear identification of the error from logs
-2. **Log Context**: Relevant log entries showing when and where the error occurred
-3. **Traceback Analysis**: Understanding of the call stack that led to the error
-4. **Code Examination**: Analysis of the actual source code that caused the issue
-5. **Root Cause**: Clear explanation of why the error occurred
-6. **Actionable Insights**: Understanding of what needs to be fixed
-
-The analysis is COMPLETE when:
-- Both log search and code analysis have been performed
-- Root cause has been clearly identified
-- There's sufficient detail to understand and fix the issue
-
-The analysis is INCOMPLETE when:
-- Only logs OR only code has been examined (need both)
-- Error found but root cause unclear
-- Traceback mentioned but code not examined
-- Generic error messages without specific context
-- More investigation would clearly help
-
-Review the conversation and determine if the analysis provides sufficient insight to understand and resolve the error.
-"""
+        # Load system prompt from file
+        working_directory = os.path.dirname(os.path.realpath(__file__))
+        prompt_path = os.path.join(working_directory, "prompts", "log_analyzer_termination_system_prompt.txt")
+        
+        try:
+            with open(prompt_path, 'r', encoding='utf-8') as f:
+                return f.read().strip()
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Termination system prompt file not found: {prompt_path}")
 
 
 class LogSearchAgent(LogAnalyzerAgentBase):
@@ -793,9 +753,9 @@ async def main():
         test_data = load_test_data_by_index(test_index)
         print(f"\nLoading test case {test_data}")
         
-        root_path = "C:\\Users\\t-linm\\Downloads\\log_analyzer_20250603\\log_analyzer_20250603"
+        root_path = "C:\\Users\\t-linm\\lisa\\lisa\\notifiers\\ai_log_analyzer\\test_logs\\log_analyzer_20250603"
         log_folder_path = os.path.join(root_path, test_data['path'])
-        code_path = "C:/Users/t-linm/Documents/lisa-fork"
+        code_path = "C:/Users/t-linm/lisa"
         
         # Validate paths exist
         if not os.path.exists(log_folder_path):
@@ -806,15 +766,38 @@ async def main():
             print(f"Warning: Code path does not exist: {code_path}")
             print("This may cause issues during code analysis.")
         
-        # Create analysis prompt
+        # Create analysis prompt by reading from combined instructions and user prompt files
         error_message = test_data['error_message']
-        analysis_prompt = f"""I need to analyze this error from LISA tests: "{error_message}"
         
-        Available resources:
-        - Log directory: {log_folder_path}
-        - Code repository: {code_path}
+        # Load combined instructions (system prompt + group chat instructions)
+        combined_instructions_path = os.path.join(working_directory, "prompts", "combined_instructions.txt")
+        try:
+            with open(combined_instructions_path, 'r', encoding='utf-8') as f:
+                system_instructions = f.read().strip()
+        except FileNotFoundError:
+            system_instructions = "You are an AI agentic system helping with log analysis."
+            print(f"Warning: combined_instructions.txt not found at {combined_instructions_path}")
         
-        Please identify the root cause of this error and provide an analysis.
+        # Load user prompt template
+        user_prompt_path = os.path.join(working_directory, "user_prompt.txt")
+        try:
+            with open(user_prompt_path, 'r', encoding='utf-8') as f:
+                user_prompt_template = f.read().strip()
+        except FileNotFoundError:
+            user_prompt_template = "Please analyze this error: {error_message}"
+            print(f"Warning: user_prompt.txt not found at {user_prompt_path}")
+        
+        # Format the user prompt with the error message
+        user_prompt = user_prompt_template.format(error_message=error_message)
+        
+        # Combine system instructions and user prompt
+        analysis_prompt = f"""{system_instructions}
+            ---
+            {user_prompt}
+
+            Available resources:
+            - Log directory: {log_folder_path}
+            - Code repository: {code_path}
         """
         
         print("\nStarting analysis...\n")
@@ -829,90 +812,61 @@ async def main():
             logging.error(f"Agent initialization failed: {e}", exc_info=True)
             return
 
-        
-        # Method 2: Group Chat Orchestration (Optional - can be enabled for more complex scenarios)
-        USE_GROUP_CHAT = True  # Set to True to enable group chat orchestration
-        
-        if USE_GROUP_CHAT:
-            print("\n=== Method 1: Group Chat Orchestration ===")
-            
-            # Create group chat with agents first
-            agents = [log_search_agent, code_search_agent]
-            group_chat = AgentGroupChat(
-                agents=agents,
-                selection_strategy=LogAnalyzerSelectionStrategy(),
-                termination_strategy=LogAnalyzerTerminationStrategy(),
-            )
+    
+        # Create group chat with agents first
+        agents = [log_search_agent, code_search_agent]
+        group_chat = AgentGroupChat(
+            agents=agents,
+            selection_strategy=LogAnalyzerSelectionStrategy(),
+            termination_strategy=LogAnalyzerTerminationStrategy(),
+        )
 
-            # Add the user analysis request directly (no system message needed)
-            await group_chat.add_chat_message(
-                ChatMessageContent(
-                    role=AuthorRole.USER,
-                    content=analysis_prompt,
-                )
+        # Add the user analysis request directly
+        await group_chat.add_chat_message(
+            ChatMessageContent(
+                role=AuthorRole.USER,
+                content=analysis_prompt,
             )
-            
-            # Start streaming group chat conversation
-            print("Starting collaborative analysis with group chat...")
-            print("Agents will work together to provide a comprehensive analysis...\n")
-            
-            async for response in group_chat.invoke():
-                print(f"==== {response.name} ====")
-                print(response.content)
-                print()  # Add spacing between responses
-            
-            # Collect the final cohesive analysis from the conversation
-            print("\n=== Generating Final Cohesive Analysis ===")
-            
-            # Get the complete conversation history
-            conversation_history: list[ChatMessageContent] = []
-            async for message in group_chat.get_chat_messages():
-                conversation_history.append(message)
-            
-            # Extract the most comprehensive analysis (usually the last few agent responses)
-            agent_analyses = []
-            for message in reversed(conversation_history):  # Reverse to get most recent first
-                if message.role == AuthorRole.ASSISTANT and message.content.strip():
-                    agent_analyses.append({
-                        'agent': message.name,
-                        'content': message.content
-                    })
-                    if len(agent_analyses) >= 2:  # Get last response from each agent
-                        break
-            
-            print("=== Final Collaborative Analysis ===")
-            if agent_analyses:
-                print("Combined insights from LogSearchAgent and CodeSearchAgent:\n")
-                for analysis in reversed(agent_analyses):  # Show in chronological order
-                    print(f"--- {analysis['agent']} Analysis ---")
-                    print(analysis['content'])
-                    print()
-            else:
-                print("No analysis results found in conversation history.")
+        )
+        
+        # Start streaming group chat conversation
+        print("Starting collaborative analysis with group chat...")
+        print("Agents will work together to provide a comprehensive analysis...\n")
+        
+        async for response in group_chat.invoke():
+            print(f"==== {response.name} ====")
+            print(response.content)
+            print()  # Add spacing between responses
+        
+        # Collect the final cohesive analysis from the conversation
+        print("\n=== Generating Final Cohesive Analysis ===")
+        
+        # Get the complete conversation history
+        conversation_history: list[ChatMessageContent] = []
+        async for message in group_chat.get_chat_messages():
+            conversation_history.append(message)
+        
+        # Extract the most comprehensive analysis (usually the last few agent responses)
+        agent_analyses = []
+        for message in reversed(conversation_history):  # Reverse to get most recent first
+            if message.role == AuthorRole.ASSISTANT and message.content.strip():
+                agent_analyses.append({
+                    'agent': message.name,
+                    'content': message.content
+                })
+                if len(agent_analyses) >= 2:  # Get last response from each agent
+                    break
+        
+        print("=== Final Collaborative Analysis ===")
+        if agent_analyses:
+            print("Combined insights from LogSearchAgent and CodeSearchAgent:\n")
+            for analysis in reversed(agent_analyses):  # Show in chronological order
+                print(f"--- {analysis['agent']} Analysis ---")
+                print(analysis['content'])
+                print()
         else:
-            print("\n=== Method 2: Direct agent invocation ===")
-            # Use log search agent for analysis
-            print("--- Log Search Agent Analysis ---")
-            
-            # Convert to ChatMessageContent for base class invoke method
-            from semantic_kernel.contents import ChatMessageContent, AuthorRole
-            user_message = ChatMessageContent(role=AuthorRole.USER, content=analysis_prompt)
-            
-            async for response in log_search_agent.invoke(
-                messages=[user_message],
-                log_folder_path=log_folder_path,
-                additional_context="Focus on log file analysis and error pattern detection."
-            ):
-                print(response.content)
-            
-            # Use code search agent for analysis  
-            print("\n--- Code Search Agent Analysis ---")
-            async for response in code_search_agent.invoke(
-                messages=[user_message],
-                code_path=code_path,
-                additional_context="Focus on source code analysis and implementation understanding."
-            ):
-                print(response.content)
+            print("No analysis results found in conversation history.")
+
 
         print("\n=== Analysis Complete ===")
         
