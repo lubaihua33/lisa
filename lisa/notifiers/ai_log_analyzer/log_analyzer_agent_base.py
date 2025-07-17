@@ -97,6 +97,19 @@ class LogAnalyzerAgentBase(ChatCompletionAgent, ABC):
                 raise ValueError(
                     f"Unsupported service: {service}. Supported services are: {', '.join([s.value for s in AIServices])}"
                 )
+    
+    def _create_execution_settings(self):
+        """Create execution settings with automatic function calling enabled."""
+        from semantic_kernel.connectors.ai.function_choice_behavior import FunctionChoiceBehavior
+        from semantic_kernel.connectors.ai.open_ai import AzureChatPromptExecutionSettings
+        
+        execution_settings = AzureChatPromptExecutionSettings()
+        execution_settings.function_choice_behavior = FunctionChoiceBehavior.Auto()
+        execution_settings.temperature = 0.1  # Low randomness for consistent analysis
+        execution_settings.top_p = 0.3       # Focused responses
+        execution_settings.max_tokens = 4000  # Adequate response length
+        
+        return execution_settings
 
     @override
     async def invoke(

@@ -4,29 +4,49 @@ import logging
 import re
 import os
 import json
+import sys
 from enum import Enum
 from rapidfuzz import fuzz
-from typing import List
+from typing import List, TYPE_CHECKING, ClassVar
 from dataclasses import dataclass
 from dotenv import load_dotenv
-from semantic_kernel import Kernel
+from pydantic import Field
 from semantic_kernel.utils.logging import setup_logging
+from semantic_kernel.utils.feature_stage_decorator import experimental
 from semantic_kernel.functions import kernel_function
-from semantic_kernel.core_plugins.text_memory_plugin import TextMemoryPlugin
-from semantic_kernel.contents import ChatHistoryTruncationReducer
-from semantic_kernel.connectors.ai.function_choice_behavior import FunctionChoiceBehavior
-from semantic_kernel.contents.chat_history import ChatHistory, ChatMessageContent
-from semantic_kernel.connectors.ai.open_ai import AzureOpenAISettings, AzureChatCompletion, OpenAITextEmbedding
-from semantic_kernel.memory.volatile_memory_store import VolatileMemoryStore
-from semantic_kernel.memory import SemanticTextMemory
-from semantic_kernel.core_plugins import WebSearchEnginePlugin
+from semantic_kernel.agents import AgentGroupChat, MagenticOrchestration, StandardMagenticManager
+from semantic_kernel.agents.runtime import InProcessRuntime
+from semantic_kernel.agents.strategies.selection.selection_strategy import SelectionStrategy
+from semantic_kernel.agents.strategies.termination.termination_strategy import TerminationStrategy
+from semantic_kernel.contents import AuthorRole, ChatMessageContent
+from semantic_kernel.connectors.ai.chat_completion_client_base import ChatCompletionClientBase
+from semantic_kernel.connectors.ai.open_ai import (
+    AzureChatPromptExecutionSettings,
+    AzureChatCompletion,
+)
+from semantic_kernel.contents.chat_history import ChatHistory
 from semantic_kernel.connectors.ai.open_ai.prompt_execution_settings.azure_chat_prompt_execution_settings import (
     AzureChatPromptExecutionSettings,
 )
+from log_analyzer_agent_base import LogAnalyzerAgentBase
 
+if TYPE_CHECKING:
+    from semantic_kernel.agents import Agent
+    from semantic_kernel.contents.chat_message_content import ChatMessageContent
 
-## Load environment variables from .env file
 load_dotenv()
+
+
+
+# Validate required environment variables
+required_env_vars = ["AZURE_OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT"]
+missing_vars = [var for var in required_env_vars if not os.getenv(var)]
+if missing_vars:
+    raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
+
+# Constants for termination strategy responses
+TERMINATE_TRUE_KEYWORD = "yes"
+TERMINATE_FALSE_KEYWORD = "no"
 
 
 ## Constants and Enums
@@ -60,6 +80,9 @@ class RegexPatterns:
     LISA_LOG_PATTERN = r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})\[(\d+)\]\[([^\]]+)\]\s+([^\s]+)\s+(.*)$'
 
     FILE_PATH_PATTERN = r'File "([^"]+)"'
+    
+    # Command ID pattern for extracting command IDs from log messages
+    COMMAND_ID_PATTERN = r'cmd_id:(\w+)'
     
 
 class FileExtensions:
@@ -240,11 +263,16 @@ def setup_debug_logging():
     setup_logging()
     logging.getLogger().setLevel(logging.DEBUG)
 
-    # Create file handler and format each log message
-    file_handler = logging.FileHandler(tracing_filepath)
+    # Create file handler and format each log message with UTF-8 encoding
+    file_handler = logging.FileHandler(tracing_filepath, encoding='utf-8')
     file_handler.setLevel(logging.DEBUG)
     formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     file_handler.setFormatter(formatter)
+
+    # Create console handler for INFO and above
+    # console_handler = logging.StreamHandler()
+    # console_handler.setLevel(logging.INFO)
+    # console_handler.setFormatter(formatter)
 
     # Remove any existing handlers except the file handler
     for handler in logging.getLogger().handlers[:]:
@@ -252,10 +280,22 @@ def setup_debug_logging():
     
     # Add both file and console handlers
     logging.getLogger().addHandler(file_handler)
+    # logging.getLogger().addHandler(console_handler)
     
     # Add verbosity filter to truncate verbose messages
     verbosity_filter = VerbosityFilter()
     logging.getLogger().addFilter(verbosity_filter)
+    
+    # # Enable detailed logging for Semantic Kernel components
+    # logging.getLogger("semantic_kernel").setLevel(logging.DEBUG)
+    # logging.getLogger("semantic_kernel.connectors").setLevel(logging.DEBUG)
+    # logging.getLogger("semantic_kernel.connectors.ai").setLevel(logging.DEBUG)
+    # logging.getLogger("semantic_kernel.connectors.ai.open_ai").setLevel(logging.DEBUG)
+    
+    # # Enable HTTP request logging to capture all LLM requests
+    # logging.getLogger("httpcore").setLevel(logging.DEBUG)
+    # logging.getLogger("httpx").setLevel(logging.DEBUG)
+    # logging.getLogger("openai").setLevel(logging.DEBUG)
     
     logging.info(f"Debug logging configured. Writing to: {tracing_filepath}")
 
@@ -331,6 +371,28 @@ def parse_lisa_log_entry(log_entry: str, log_line: int) -> LogEntry | None:
         line_number=log_line,
         raw_line=log_entry.strip()
     )
+
+# def agent_response_callback(agent_name: str, response: str) -> None:
+#     """
+#     Callback function that prints each agent's response as the orchestration progresses.
+    
+#     Args:
+#         agent_name: The name of the agent providing the response
+#         response: The response content from the agent
+#     """
+#     print(f"==== {agent_name} ====")
+#     print(response)
+#     print()  # Add spacing between responses
+
+def agent_response_callback(message: ChatMessageContent) -> None:
+    """
+    Callback function that prints each agent's response as the orchestration progresses.
+    
+    Args:
+        agent_name: The name of the agent providing the response
+        response: The response content from the agent
+    """
+    print(f"**{message.name}**\n{message.content}\n")
 
 
 ## Agent plugin definitions
@@ -447,7 +509,7 @@ class LisaErrorAnalyzerPlugin:
         result = "\n".join(traceback)
         logging.debug(f"result: {result}")
         return result
-
+    
     @kernel_function(
         name="list_files",
         description="Parses the traceback for code files involved in the error. Uses the file paths from the traceback to list all the files relevant to the error." \
@@ -472,8 +534,6 @@ class LisaErrorAnalyzerPlugin:
 
         print("\nThe agent is gathering information. Please wait...\n")
         return files
-    
-
 
 
 
@@ -485,219 +545,325 @@ class InputPath:
     # Represents the path to the file
     value: str
 
-class LogAgent:
-    def __init__(self, url: str, key: str, **kwargs):
-        self.kernel = Kernel()
+
+## Group Chat Orchestration Strategies
+@experimental
+class LogAnalyzerSelectionStrategy(SelectionStrategy):
+    """An intelligent selection strategy that orchestrates log analysis workflow."""
+
+    NUM_OF_RETRIES: ClassVar[int] = 3
     
-        self.chat_completion = AzureChatCompletion(
-            deployment_name="gpt-4o",
-            api_key=key,
-            base_url=url,
-        )
-        self.kernel.add_service(self.chat_completion)
+    chat_completion_service: ChatCompletionClientBase = Field(default_factory=lambda: AzureChatCompletion(
+        deployment_name="gpt-4o",
+        api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+        base_url=os.getenv("AZURE_OPENAI_ENDPOINT"),
+    ))
 
-        # Add semantic text memory with VolatileMemoryStore
-        # self.add_semantic_text_memory()
+    async def select_agent(self, agents: List["Agent"], history: List["ChatMessageContent"]) -> "Agent":
+        """Select the next agent to interact with using intelligent workflow orchestration.
 
-        self.kernel.add_plugin(
-            LisaErrorAnalyzerPlugin(),
-            plugin_name="LisaErrorAnalyzer",
-        )
+        Args:
+            agents: The list of agents to select from.
+            history: The history of messages in the conversation.
 
-        setup_debug_logging()
-
-        # Enable planning -- the model decides which function to use, if any
-        self.execution_settings = AzureChatPromptExecutionSettings()
-        self.execution_settings.function_choice_behavior = FunctionChoiceBehavior.Auto()
-        
-        # Balanced consistency settings for log analysis
-        self.execution_settings.temperature = 0.1         # Very low randomness
-        self.execution_settings.top_p = 0.3              # Focused but not too restrictive
-        self.execution_settings.max_tokens = 4000        # Consistent response length
-        self.execution_settings.frequency_penalty = 0.1  # Slight penalty for repetition
-        self.execution_settings.presence_penalty = 0.1   # Slight penalty for presence
-
-        # Load summarization instructions from file
-        summarization_path = os.path.join(working_directory, "summarization_instructions.txt")
-        with open(summarization_path, 'r') as f:
-            logging.info(f"Loading summarization instructions from {summarization_path}")
-            summarization_instructions = f.read()
-        
-        # Initialize chat history with truncation capability
-        self.history = ChatHistoryTruncationReducer(
-            target_count=1,  # Keep 1 most recent message
-            threshold_count=4,  # Allow up to 5 messages before truncating (target + threshold)
-            auto_reduce=True,  # Automatically truncate when messages exceed target+threshold
-            service=self.chat_completion,
-            summarization_instructions=summarization_instructions
-        )
-    
-    ## TO-DO
-    # def add_semantic_text_memory(self, plugin_name="TextMemoryPlugin") -> None:
-    #     """
-    #     Add semantic text memory capability to the kernel using a VolatileMemoryStore.
-        
-    #     Args:
-    #         plugin_name: The name to register the memory plugin under
-    #     """
-    #     # Initialize text embedding service if not already done
-    #     # self.text_embedding = OpenAITextEmbedding(
-    #     #     ai_model_id="text-embedding-ada-002",
-    #     #     api_key=os.getenv("AZURE_OPENAI_API_KEY"),
-    #     # )
-    #     # self.kernel.add_service(self.text_embedding)
-        
-        
-    #     # Create semantic text memory with the store and embedding service
-    #     memory = SemanticTextMemory(
-    #         storage=VolatileMemoryStore(),
-    #         embeddings_generator=self.text_embedding
-    #     )
-        
-    #     # Add memory plugin to the kernel
-    #     self.kernel.add_plugin(
-    #         TextMemoryPlugin(memory),
-    #         plugin_name=plugin_name
-    #     )
-        
-    #     logging.info(f"Semantic text memory plugin '{plugin_name}' added to the kernel with VolatileMemoryStore.")
-        
-    
-    async def clear_history(self, save_to_memory=True):
+        Returns:
+            The next agent to interact with.
         """
-        Explicitly clear the chat history to start a fresh analysis.
-        This is useful when switching to a completely different error or log set.
-        """
-        if hasattr(self, 'history') and self.history is not None:
-            self.history.messages = []
-            print("Chat history has been cleared.")
+        if len(agents) == 0:
+            raise ValueError("No agents to select from")
+
+        chat_history = ChatHistory(system_message=self.get_system_message(agents).strip())
+
+        for message in history:
+            content = message.content
+            # We don't want to add messages whose text content is empty.
+            # Those messages are likely messages from function calls and function results.
+            if content:
+                chat_history.add_message(message)
+
+        chat_history.add_user_message("Now follow the rules and select the next agent by typing the agent's index.")
+
+        for _ in range(self.NUM_OF_RETRIES):
+            completion = await self.chat_completion_service.get_chat_message_content(
+                chat_history,
+                AzureChatPromptExecutionSettings(temperature=0.1),  # Lower temperature for more consistent decisions
+            )
+
+            if completion is None:
+                continue
+
+            try:
+                return agents[int(completion.content)]
+            except ValueError as ex:
+                chat_history.add_message(completion)
+                chat_history.add_user_message(str(ex))
+                chat_history.add_user_message(f"You must only say a number between 0 and {len(agents) - 1}.")
+
+        raise ValueError("Failed to select an agent since the model did not return a valid index")
+
+    def get_system_message(self, agents: List["Agent"]) -> str:
+        """Generate system message for intelligent log analysis workflow orchestration."""
+        # Load system prompt template from file
+        working_directory = os.path.dirname(os.path.realpath(__file__))
+        prompt_path = os.path.join(working_directory, "prompts", "log_analyzer_selection_system_prompt.txt")
         
-        if hasattr(self, 'current_error'):
-            delattr(self, 'current_error')
-    
-    async def analyze(self, error_message: str, paths: List[InputPath]) -> str:
-
-        self.history.messages = []  # Clear history
-        self.current_error = error_message
+        try:
+            with open(prompt_path, 'r', encoding='utf-8') as f:
+                system_prompt_template = f.read().strip()
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Selection system prompt file not found: {prompt_path}")
         
-        # Load system message from file
-        system_prompt_path = os.path.join(working_directory, "system_prompt.txt")
-        with open(system_prompt_path, 'r') as f:
-            system_message = f.read().strip()
+        # Format the template with agent information
+        NEWLINE = "\n"
+        agent_list = NEWLINE.join(f"[{index}] {agent.name}:{NEWLINE}{agent.description}" for index, agent in enumerate(agents))
+        max_agent_index = len(agents) - 1
         
-        # Guide the model with system message
-        self.history.add_system_message(system_message)
-
-        assistant_message = "The following files will be used for analysis:\n"
-        for path in paths:
-            assistant_message += f"- {path.type}: {path.value}\n"
-        self.history.add_assistant_message(assistant_message)
-
-        # Load user message from file and format it with the error message
-        user_prompt_path = os.path.join(working_directory, "user_prompt.txt")
-        with open(user_prompt_path, 'r') as f:
-            user_message_template = f.read().strip()
-        
-        # Format the user message with the error
-        user_message = user_message_template.format(error_message=error_message)
-        self.history.add_user_message(user_message)
-
-        print("\nThe agent is analyzing the error and gathering information. Please wait...\n\n")
-
-        before = len(self.history.messages)
-        print(f"before: {before}")
-
-        # Capture messages before the model call
-        messages_before = list(self.history.messages)
-        
-        # Wait for a response from the model
-        result = await self.chat_completion.get_chat_message_content(
-            chat_history=self.history,
-            settings=self.execution_settings,
-            kernel=self.kernel,
+        return system_prompt_template.format(
+            agent_list=agent_list,
+            max_agent_index=max_agent_index
         )
 
-        after = len(self.history.messages)
+
+@experimental
+class LogAnalyzerTerminationStrategy(TerminationStrategy):
+    """An intelligent termination strategy for log analysis group chat."""
+    
+    NUM_OF_RETRIES: ClassVar[int] = 3
+    maximum_iterations: int = 8  # Increased for thorough analysis
+    
+    chat_completion_service: ChatCompletionClientBase = Field(default_factory=lambda: AzureChatCompletion(
+        deployment_name="gpt-4o",
+        api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+        base_url=os.getenv("AZURE_OPENAI_ENDPOINT"),
+    ))
+    
+    async def should_agent_terminate(self, agent: "Agent", history: List["ChatMessageContent"]) -> bool:
+        """Determine if the log analysis should terminate using LLM intelligence.
         
-        # Print new messages that were added during the model call
-        if after > before:
-            print(f"\n--- {after - before} new messages added during model call ---")
-            new_messages = self.history.messages[before:]
-            for i, msg in enumerate(new_messages, 1):
-                print(f"New message {i}:")
-                print(f"  Role: {getattr(msg, 'role', 'unknown')}")
-                print(f"  Content: {str(msg)[:200]}{'...' if len(str(msg)) > 200 else ''}")
-                print()
-        elif after < before:
-            print(f"\n--- {before - after} messages were removed during model call (history reduction) ---")
-        else:
-            print(f"\n--- No messages added during model call ---")
-
-
-        print("\nAssistant > " + str(result))
-        self.history.add_message(result)
-        # self.history.add_message_async(result, role="assistant", encoding="utf-8")
-
-        print(f"after: {after}")
-
+        Args:
+            agent: The agent to check (not used in group chat context).
+            history: The history of messages in the conversation.
+            
+        Returns:
+            True if the analysis should terminate, False otherwise.
+        """
+        # Always allow at least 2 turns (one for each agent minimum)
+        agent_responses = [msg for msg in history if msg.role == AuthorRole.ASSISTANT]
+        if len(agent_responses) < 2:
+            return False
+            
+        # Hard limit to prevent infinite loops
+        if len(agent_responses) >= self.maximum_iterations:
+            return True
         
-        print(f"Chat history length after adding assistant response: {len(self.history.messages)}")
-        # print(f"Chat history messages: {self.history.messages}")
+        # Use LLM to make intelligent termination decision
+        chat_history = ChatHistory(system_message=self.get_system_message().strip())
         
-        # print(f"final history messages: {self.history.messages}")
+        # Add conversation history (excluding function call messages)
+        for message in history:
+            if message.content:  # Skip empty function call messages
+                chat_history.add_message(message)
+        
+        chat_history.add_user_message(
+            "Based on the conversation above, has the log analysis reached a satisfactory conclusion? "
+            "Answer with 'yes' if the root cause has been identified and sufficient analysis provided, "
+            "or 'no' if more investigation is needed."
+        )
+        
+        for _ in range(self.NUM_OF_RETRIES):
+            completion = await self.chat_completion_service.get_chat_message_content(
+                chat_history,
+                AzureChatPromptExecutionSettings(temperature=0.1),
+            )
+            
+            if completion is None:
+                continue
+                
+            response_lower = completion.content.lower().strip()
+            
+            if TERMINATE_TRUE_KEYWORD in response_lower and TERMINATE_FALSE_KEYWORD not in response_lower:
+                return True
+            elif TERMINATE_FALSE_KEYWORD in response_lower and TERMINATE_TRUE_KEYWORD not in response_lower:
+                return False
+            else:
+                # Ask for clarification
+                chat_history.add_message(completion)
+                chat_history.add_user_message(
+                    f"Please answer clearly with either '{TERMINATE_TRUE_KEYWORD}' (terminate) or '{TERMINATE_FALSE_KEYWORD}' (continue analysis)."
+                )
+        
+        # Fallback: if LLM doesn't give clear answer, continue unless at max turns
+        return len(agent_responses) >= self.maximum_iterations
+    
+    def get_system_message(self) -> str:
+        """Generate system message for intelligent termination assessment."""
+        # Load system prompt from file
+        working_directory = os.path.dirname(os.path.realpath(__file__))
+        prompt_path = os.path.join(working_directory, "prompts", "log_analyzer_termination_system_prompt.txt")
+        
+        try:
+            with open(prompt_path, 'r', encoding='utf-8') as f:
+                return f.read().strip()
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Termination system prompt file not found: {prompt_path}")
 
-        print("-----------------------\n")
+
+class LogSearchAgent(LogAnalyzerAgentBase):
+    """
+    Specialized agent for searching and analyzing log files.
+    
+    This agent focuses on:
+    - LISA log format parsing and analysis
+    - Error pattern detection in standard and serial console logs
+    - Fuzzy matching for error message identification
+    - Timeline reconstruction and context extraction
+    """
+    
+    def __init__(self, url: str = None, key: str = None):
+        # Load specialized system prompt for log search
+        instructions = self._load_system_prompt("log_search_system_prompt.txt")
         
-        return str(result)
+        # Initialize with Azure OpenAI service and log analysis plugin
+        super().__init__(
+            service=self._create_ai_service(),
+            name="LogSearchAgent",
+            description="Searches and analyzes log files for error patterns and diagnostic information.",
+            instructions=instructions,
+            plugins=[LisaErrorAnalyzerPlugin()]
+        )
+
+
+class CodeSearchAgent(LogAnalyzerAgentBase):
+    """
+    Specialized agent for examining source code and implementations.
+    
+    This agent focuses on:
+    - Source code analysis related to log errors
+    - Traceback parsing and file mapping
+    - Implementation logic understanding
+    - Code-to-error correlation analysis
+    """
+    
+    def __init__(self, url: str = None, key: str = None):
+        # Load specialized system prompt for code search
+        instructions = self._load_system_prompt("code_search_system_prompt.txt")
+        
+        # Initialize with Azure OpenAI service and log analysis plugin
+        super().__init__(
+            service=self._create_ai_service(),
+            name="CodeSearchAgent", 
+            description="Examines source code files and analyzes implementations related to errors.",
+            instructions=instructions,
+            plugins=[LisaErrorAnalyzerPlugin()]
+        )
 
 
 async def main():
-    print("The agent is starting up...")
+    """
+    Main function that orchestrates a simple multi-agent log analysis workflow.
+    
+    Uses specialized agents to analyze LISA test errors by combining log analysis 
+    and code inspection capabilities.
+    """
+    # Set up debug logging for all Semantic Kernel operations
+    setup_debug_logging()
+    
+    print("The agents are starting up...")
 
-    agent = LogAgent(
-        url=os.getenv("AZURE_OPENAI_ENDPOINT"),
-        key=os.getenv("AZURE_OPENAI_API_KEY"),
-    )
-
-    print("The agent is ready!")
-
-    # Load test data by index - change this index to test different cases (0-11)
+    # Load test case and set up paths
     test_index = 8
     
     try:
         test_data = load_test_data_by_index(test_index)
         print(f"\nLoading test case {test_data}")
         
-        # Extract the log folder path from the test path
         root_path = "C:\\Users\\t-linm\\lisa\\lisa\\notifiers\\ai_log_analyzer\\test_logs\\log_analyzer_20250603"
         log_folder_path = os.path.join(root_path, test_data['path'])
+        code_path = "C:/Users/t-linm/lisa"
         
-        # Display chat history truncation configuration
-        target_count = getattr(agent.history, "target_count")
-        threshold = getattr(agent.history, "threshold_count")
-        print(f"\nChat history configured with target_count={target_count}, threshold_count={threshold}")
-        print(f"Truncation will trigger when messages exceed {target_count + threshold}")
+
+        # Create analysis prompt by reading from combined instructions and user prompt files
+        error_message = test_data['error_message']
         
-        await agent.analyze(
-            error_message=test_data['error_message'],
-            paths=[
-                InputPath(type="log", value=log_folder_path),
-                InputPath(type="code", value="C:/Users/t-linm/lisa"),
-            ]
+        # Load combined instructions (system prompt + group chat instructions)
+        combined_instructions_path = os.path.join(working_directory, "prompts", "combined_instructions.txt")
+        try:
+            with open(combined_instructions_path, 'r', encoding='utf-8') as f:
+                system_instructions = f.read().strip()
+        except FileNotFoundError:
+            print(f"Warning: combined_instructions.txt not found at {combined_instructions_path}")
+        
+        # Load user prompt template
+        user_prompt_path = os.path.join(working_directory, "user_prompt.txt")
+        try:
+            with open(user_prompt_path, 'r', encoding='utf-8') as f:
+                user_prompt_template = f.read().strip()
+        except FileNotFoundError:
+            user_prompt_template = "Please analyze this error: {error_message}"
+            print(f"Warning: user_prompt.txt not found at {user_prompt_path}")
+
+        user_prompt = user_prompt_template.format(error_message=error_message)
+        
+        analysis_prompt = f"""{system_instructions}
+            ---
+            {user_prompt}
+
+            Available resources:
+            - Log directory: {log_folder_path}
+            - Code repository: {code_path}
+        """
+        
+        print("\nStarting analysis...\n")
+
+        # Create specialized agents using the custom base class
+        try:
+            log_search_agent = LogSearchAgent()
+            code_search_agent = CodeSearchAgent()
+            print("The agents are ready!")
+        except Exception as e:
+            print(f"Error initializing agents: {e}")
+            logging.error(f"Agent initialization failed: {e}", exc_info=True)
+            return
+    
+        agents= [
+            log_search_agent,
+            code_search_agent
+        ]
+
+        # Create magentic orchestration
+        chat_completion_service = AzureChatCompletion(
+            deployment_name="gpt-4o",
+            api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+            base_url=os.getenv("AZURE_OPENAI_ENDPOINT"),
         )
+        manager = StandardMagenticManager(chat_completion_service=chat_completion_service)
+        magentic_orchestration = MagenticOrchestration(
+            members=agents,
+            manager=manager,
+            agent_response_callback=agent_response_callback,
+        )
+
+        runtime = InProcessRuntime()
+        runtime.start()
         
-        # Final check after analysis
-        final_count = len(agent.history.messages)
-        print(f"Final message count after analysis: {final_count}")
+        orchestration_result = await magentic_orchestration.invoke(
+            task=analysis_prompt,
+            runtime=runtime,
+        )
+
+        value = await orchestration_result.get()
+
+        print(f"\nFinal result:\n{value}")
         
-        # Display whether truncation occurred
-        if final_count <= (target_count + threshold):
-            print(f"Chat history is within the configured limits ({target_count + threshold})")
-        else:
-            print(f"Chat history exceeds the configured limits ({target_count + threshold})")
-        
+        await runtime.stop_when_idle()
+
+
     except (FileNotFoundError, IndexError, ValueError) as e:
         print(f"Error loading test data: {e}")
+        return
+    except Exception as e:
+        print(f"Unexpected error during analysis: {e}")
+        logging.error(f"Analysis failed with error: {e}", exc_info=True)
         return
 
 
