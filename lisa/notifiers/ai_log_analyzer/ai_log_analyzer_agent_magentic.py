@@ -34,7 +34,9 @@ if TYPE_CHECKING:
     from semantic_kernel.agents import Agent
     from semantic_kernel.contents.chat_message_content import ChatMessageContent
 
-load_dotenv()
+# Load environment variables from local .env file
+working_directory = os.path.dirname(os.path.realpath(__file__))
+load_dotenv(os.path.join(working_directory, '.env'))
 
 
 
@@ -171,8 +173,6 @@ class LogEntry:
 
 
 ## Helper functions
-working_directory = os.path.dirname(os.path.realpath(__file__))
-
 def load_test_data_by_index(index: int) -> dict:
     """
     Load test data from inputs.json file by index.
@@ -534,8 +534,7 @@ class LisaErrorAnalyzerPlugin:
 
         print("\nThe agent is gathering information. Please wait...\n")
         return files
-
-
+    
 
 ## Path input structure
 @dataclass
@@ -777,9 +776,16 @@ async def main():
         test_data = load_test_data_by_index(test_index)
         print(f"\nLoading test case {test_data}")
         
-        root_path = "C:\\Users\\t-linm\\lisa\\lisa\\notifiers\\ai_log_analyzer\\test_logs\\log_analyzer_20250603"
+        # Get paths from environment variables
+        root_path = os.getenv("ROOT_PATH")
+        if not root_path:
+            raise ValueError("ROOT_PATH environment variable is not set")
+        
+        code_path = os.getenv("CODE_PATH")
+        if not code_path:
+            raise ValueError("CODE_PATH environment variable is not set")
+        
         log_folder_path = os.path.join(root_path, test_data['path'])
-        code_path = "C:/Users/t-linm/lisa"
         
 
         # Create analysis prompt by reading from combined instructions and user prompt files

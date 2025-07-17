@@ -36,7 +36,9 @@ if TYPE_CHECKING:
     from semantic_kernel.agents import Agent
     from semantic_kernel.contents.chat_message_content import ChatMessageContent
 
-load_dotenv()
+# Load environment variables from local .env file
+working_directory = os.path.dirname(os.path.realpath(__file__))
+load_dotenv(os.path.join(working_directory, '.env'))
 
 
 
@@ -173,8 +175,6 @@ class LogEntry:
 
 
 ## Helper functions
-working_directory = os.path.dirname(os.path.realpath(__file__))
-
 def load_test_data_by_index(index: int) -> dict:
     """
     Load test data from inputs.json file by index.
@@ -463,8 +463,7 @@ class LisaErrorAnalyzerPlugin:
     
     @kernel_function(
         name="read_text_file",
-        description="Extracts the call trace or relevant code segment from a file (log or code) by locating the section that contains the call trace" \
-        " or error context associated with a given error message. Returns a string containing the line numbers in the log and the extracted segment. " \
+        description="Extracts traceback or code segment from a file. Returns a string containing the line numbers in the log and the extracted segment. " \
         "The relevant segment may start several lines before the error line, so use an offset (e.g. 20-30 lines before the error line) to capture the full content." \
         "For the call trace in the log, capture the line number corresponding to the ERROR-level log entry.",
     )
@@ -756,9 +755,16 @@ async def main():
         test_data = load_test_data_by_index(test_index)
         print(f"\nLoading test case {test_data}")
         
-        root_path = "C:\\Users\\t-linm\\lisa\\lisa\\notifiers\\ai_log_analyzer\\test_logs\\log_analyzer_20250603"
+        # Get paths from environment variables
+        root_path = os.getenv("ROOT_PATH")
+        if not root_path:
+            raise ValueError("ROOT_PATH environment variable is not set")
+        
+        code_path = os.getenv("CODE_PATH")
+        if not code_path:
+            raise ValueError("CODE_PATH environment variable is not set")
+        
         log_folder_path = os.path.join(root_path, test_data['path'])
-        code_path = "C:/Users/t-linm/lisa"
         
         # Validate paths exist
         if not os.path.exists(log_folder_path):
@@ -834,55 +840,42 @@ async def main():
         
         # Start streaming group chat conversation
         print("Starting collaborative analysis with group chat...")
-        print("Agents are working together to analyze the error. Please wait...\n")
+        print("Agents will work together to provide a comprehensive analysis...\n")
         
-        # Collect all agent responses without printing them
-        agent_responses = []
         async for response in group_chat.invoke():
-            if response.content.strip():  # Only store non-empty responses
-                agent_responses.append({
-                    'agent': response.name,
-                    'content': response.content,
-                    'timestamp': response.created_on if hasattr(response, 'created_on') else None
+            print(f"==== {response.name} ====")
+            print(response.content)
+            print()  # Add spacing between responses
+        
+        # Collect the final cohesive analysis from the conversation
+        print("\n=== Generating Final Cohesive Analysis ===")
+        
+        # Get the complete conversation history
+        conversation_history: list[ChatMessageContent] = []
+        async for message in group_chat.get_chat_messages():
+            conversation_history.append(message)
+        
+        # Extract the most comprehensive analysis (usually the last few agent responses)
+        agent_analyses = []
+        for message in reversed(conversation_history):  # Reverse to get most recent first
+            if message.role == AuthorRole.ASSISTANT and message.content.strip():
+                agent_analyses.append({
+                    'agent': message.name,
+                    'content': message.content
                 })
+                if len(agent_analyses) >= 2:  # Get last response from each agent
+                    break
         
-        # Generate final cohesive analysis combining all insights
         print("=== Final Collaborative Analysis ===")
-        
-        if agent_responses:
-            # Group responses by agent for better organization
-            agent_insights = {}
-            for response in agent_responses:
-                agent_name = response['agent']
-                if agent_name not in agent_insights:
-                    agent_insights[agent_name] = []
-                agent_insights[agent_name].append(response['content'])
-            
-            # Combine insights from all agents into a comprehensive analysis
-            print("Based on collaborative analysis from the AI agent team:\n")
-            
-            # Synthesize findings from log analysis
-            if 'LogSearchAgent' in agent_insights:
-                log_findings = "\n".join(agent_insights['LogSearchAgent'])
-                print("**Log Analysis Findings:**")
-                print(log_findings)
+        if agent_analyses:
+            print("Combined insights from LogSearchAgent and CodeSearchAgent:\n")
+            for analysis in reversed(agent_analyses):  # Show in chronological order
+                print(f"--- {analysis['agent']} Analysis ---")
+                print(analysis['content'])
                 print()
-            
-            # Synthesize findings from code analysis  
-            if 'CodeSearchAgent' in agent_insights:
-                code_findings = "\n".join(agent_insights['CodeSearchAgent'])
-                print("**Code Analysis Findings:**")
-                print(code_findings)
-                print()
-            
-            # Provide unified conclusion
-            print("**Unified Analysis Summary:**")
-            print("The agents have completed their collaborative analysis. The findings above ")
-            print("represent the combined expertise of both log analysis and code examination ")
-            print("to provide a comprehensive understanding of the error condition.")
-            
         else:
-            print("No analysis results were generated by the agents.")
+            print("No analysis results found in conversation history.")
+
 
         print("\n=== Analysis Complete ===")
         

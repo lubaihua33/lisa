@@ -26,7 +26,10 @@ from semantic_kernel.connectors.ai.open_ai.prompt_execution_settings.azure_chat_
 
 
 ## Load environment variables from .env file
-load_dotenv()
+# Get the directory where this script is located
+working_directory = os.path.dirname(os.path.realpath(__file__))
+# Load from local .env file in the same directory
+load_dotenv(os.path.join(working_directory, '.env'))
 
 
 ## Constants and Enums
@@ -148,8 +151,6 @@ class LogEntry:
 
 
 ## Helper functions
-working_directory = os.path.dirname(os.path.realpath(__file__))
-
 def load_test_data_by_index(index: int) -> dict:
     """
     Load test data from inputs.json file by index.
@@ -421,14 +422,13 @@ class LisaErrorAnalyzerPlugin:
     
     @kernel_function(
         name="read_text_file",
-        description="Extracts the call trace or relevant code segment from a file (log or code) by locating the section that contains the call trace" \
-        " or error context associated with a given error message. Returns a string containing the line numbers in the log and the extracted segment. " \
+        description="Extracts traceback or code segment from a file. Returns a string containing the line numbers in the log and the extracted segment. " \
         "The relevant segment may start several lines before the error line, so use an offset (e.g. 20-30 lines before the error line) to capture the full content." \
         "For the call trace in the log, capture the line number corresponding to the ERROR-level log entry.",
     )
     def read_text_file(self, start_line_offset: int, input_path: str, line_count: int) -> str:
         """
-        Extracts the lines of the relevant segment from the file (log or code) starting from the line number of the error message.
+        Extracts the lines of the file (log or code) starting from the line number of the error message.
         offset allows the model to capture several lines before the error line to get the full context.
         """
         traceback = []
@@ -450,8 +450,7 @@ class LisaErrorAnalyzerPlugin:
 
     @kernel_function(
         name="list_files",
-        description="Parses the traceback for code files involved in the error. Uses the file paths from the traceback to list all the files relevant to the error." \
-        "Uses the code path inputted by the user to locate the correct file paths locally, and returns the list of files that are relevant to the error.",
+        description="Lists all files in the traceback.",
     )
     def list_files(self, traceback: str, code_path: str) -> List[str]:
         """
@@ -469,13 +468,8 @@ class LisaErrorAnalyzerPlugin:
                     files.append(local_path)
 
         files = list(dict.fromkeys(files))
-
-        print("\nThe agent is gathering information. Please wait...\n")
         return files
     
-
-
-
 
 ## Path input structure
 @dataclass
@@ -636,15 +630,12 @@ class LogAgent:
 
         print("\nAssistant > " + str(result))
         self.history.add_message(result)
-        # self.history.add_message_async(result, role="assistant", encoding="utf-8")
 
         print(f"after: {after}")
 
         
         print(f"Chat history length after adding assistant response: {len(self.history.messages)}")
-        # print(f"Chat history messages: {self.history.messages}")
-        
-        # print(f"final history messages: {self.history.messages}")
+
 
         print("-----------------------\n")
         
@@ -668,8 +659,15 @@ async def main():
         test_data = load_test_data_by_index(test_index)
         print(f"\nLoading test case {test_data}")
         
-        # Extract the log folder path from the test path
-        root_path = "C:\\Users\\t-linm\\lisa\\lisa\\notifiers\\ai_log_analyzer\\test_logs\\log_analyzer_20250603"
+        # Extract the log folder path from the test path using environment variable
+        root_path = os.getenv("ROOT_PATH")
+        if not root_path:
+            raise ValueError("ROOT_PATH environment variable is not set")
+        
+        code_path = os.getenv("CODE_PATH")
+        if not code_path:
+            raise ValueError("CODE_PATH environment variable is not set")
+        
         log_folder_path = os.path.join(root_path, test_data['path'])
         
         # Display chat history truncation configuration
@@ -682,7 +680,7 @@ async def main():
             error_message=test_data['error_message'],
             paths=[
                 InputPath(type="log", value=log_folder_path),
-                InputPath(type="code", value="C:/Users/t-linm/lisa"),
+                InputPath(type="code", value=code_path),
             ]
         )
         
